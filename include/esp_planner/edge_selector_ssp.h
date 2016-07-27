@@ -91,7 +91,7 @@ struct SSPState {
 };
 
 
-class EdgeSelectorSSP {
+class EdgeSelectorSSP { 
  public:
   EdgeSelectorSSP();
   // The provided set of paths is preprocessed to remove non-stochastic edges
@@ -101,7 +101,7 @@ class EdgeSelectorSSP {
   void GetSuccs(int state_id, std::vector<std::vector<int>> *succ_state_ids_map,
                 std::vector<std::vector<double>> *succ_state_probabilities_map,
                 std::vector<int> *action_ids,
-                std::vector<std::vector<int>> *action_costs_map);
+                std::vector<std::vector<double>> *action_costs_map);
   bool IsGoalState(int state_id) const;
   int GetGoalHeuristic(int state_id) const;
 
@@ -133,7 +133,7 @@ class EdgeSelectorSSP {
   void ComputeBounds(const SSPState &ssp_state, int *lower_bound,
                      int *upper_bound) const;
   int GetSuboptimalityBound(const SSPState &ssp_state) const;
-  int ComputeTransitionCost(const SSPState &parent_state,
+  double ComputeTransitionCost(const SSPState &parent_state,
                             const SSPState &child_state, int edge_id) const;
 };
 } // namspace sbpl

@@ -40,6 +40,7 @@ include_directories(include ${catkin_INCLUDE_DIRS})
 
 add_library(esp_planner
   src/edge_selector_ssp.cpp
+  src/lao_planner.cpp
 )
 
 ## Add cmake target dependencies of the library

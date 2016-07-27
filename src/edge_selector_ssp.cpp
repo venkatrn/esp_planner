@@ -52,7 +52,7 @@ bool Edge::operator!=(const Edge &other) const {
 size_t Edge::GetHash() const {
   size_t hash_value = std::hash<int>()(first);
   // boost::hash_combine is not associative, which is what we need for directed
-  // graphs.
+  // edges.
   boost::hash_combine(hash_value, std::hash<int>()(second));
   return hash_value;
 }
@@ -108,7 +108,8 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
       }
 
       const int edge_id = edge_hasher_.GetStateIDForceful(edge);
-      // cout << edge_id << endl;
+      // TODO: validate that common edges across paths have same probabilities
+      // and evaluation times, rather than just assuming.
       simplified_paths_[ii].push_back(edge_id);
     }
   }
@@ -257,16 +258,15 @@ int EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
   return (upper_bound - lower_bound);
 }
 
-int EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
+double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
                                            const SSPState &child_state, int edge_id) const {
 
   const Edge &edge = edge_hasher_.GetState(edge_id);
   // Compute the area of the trapezoid formed by the parallel sides
   // with length parent_subopt_bound and child_subopt_bound, and height
   // edge.evaluation_time.
-  const int cost = static_cast<int>(0.5 * kEdgeEvalTimeMultiplier *
-                                    edge.evaluation_time * static_cast<double>(parent_state.suboptimality_bound +
-                                                                               child_state.suboptimality_bound));
+  const double cost = 0.5 * edge.evaluation_time * static_cast<double>(parent_state.suboptimality_bound +
+                                                                               child_state.suboptimality_bound);
   return cost;
 }
 
@@ -285,7 +285,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
                                std::vector<std::vector<int>> *succ_state_ids_map,
                                std::vector<std::vector<double>> *succ_state_probabilities_map,
                                std::vector<int> *action_ids,
-                               std::vector<std::vector<int>> *action_costs_map) {
+                               std::vector<std::vector<double>> *action_costs_map) {
   auto &parent_state = state_hasher_.GetState(state_id);
   succ_state_ids_map->clear();
   succ_state_probabilities_map->clear();
@@ -317,7 +317,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     succ_optimistic.valid_bits.set(ii, true);
     succ_optimistic.suboptimality_bound = GetSuboptimalityBound(succ_optimistic);
     const double prob_optimistic = edge.probability;
-    const int cost_optimistic = ComputeTransitionCost(parent_state,
+    const double cost_optimistic = ComputeTransitionCost(parent_state,
                                                       succ_optimistic, ii);
     const int succ_optimistic_id = state_hasher_.GetStateIDForceful(
                                      succ_optimistic);
@@ -326,14 +326,14 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     succ_pessimistic.invalid_bits.set(ii, true);
     succ_pessimistic.suboptimality_bound = GetSuboptimalityBound(succ_pessimistic);
     const double prob_pessimistic = 1 - edge.probability;
-    const int cost_pessimistic = ComputeTransitionCost(parent_state,
+    const double cost_pessimistic = ComputeTransitionCost(parent_state,
                                                        succ_pessimistic, ii);
     const int succ_pessimistic_id = state_hasher_.GetStateIDForceful(
                                       succ_pessimistic);
 
     const vector<int> succ_states{succ_optimistic_id, succ_pessimistic_id};
     const vector<double> succ_probabilities{prob_optimistic, prob_pessimistic};
-    const vector<int> succ_costs{cost_optimistic, cost_pessimistic};
+    const vector<double> succ_costs{cost_optimistic, cost_pessimistic};
 
     succ_state_ids_map->push_back(succ_states);
     succ_state_probabilities_map->push_back(succ_probabilities);
