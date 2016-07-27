@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(esp_planner)
 
 set(CMAKE_CXX_FLAGS "-std=c++11")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -9,7 +10,7 @@ set(CMAKE_CXX_FLAGS "-std=c++11")
 find_package(catkin REQUIRED COMPONENTS sbpl_utils)
 
 ## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS system)
 
 
 
@@ -47,13 +48,7 @@ add_library(esp_planner
 # add_dependencies(esp_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Declare a C++ executable
-# add_executable(esp_planner_node src/esp_planner_node.cpp)
-
-## Add cmake target dependencies of the executable
-## same as for the library above
-# add_dependencies(esp_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-## Specify libraries to link a library or executable target against
-# target_link_libraries(esp_planner_node
-#   ${catkin_LIBRARIES}
-# )
+add_executable(esp_test src/test_esp.cpp)
+add_dependencies(esp_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(esp_test
+  esp_planner)
