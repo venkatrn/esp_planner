@@ -18,16 +18,15 @@ using namespace std;
 
 namespace {
 constexpr double kFloatingPointTolerance = 1e-3;
-constexpr int kEdgeEvalTimeMultiplier = 10;
+constexpr double kEdgeEvalTimeMultiplier = 10;
 }
 
 namespace sbpl {
 
-Edge::Edge(int first, int second, double probability, double evaluation_time) {
-  this->first = first;
-  this->second = second;
-  this->probability = probability;
-  this->evaluation_time = evaluation_time;
+Edge::Edge(int first, int second,
+           double probability, double evaluation_time) :
+  first{first}, second{second},
+  probability{probability}, evaluation_time{evaluation_time} {
 
   if (probability < 0 || probability > 1.0) {
     printf("ERROR: Illegal probability value %f for edge: (%d %d)\n", probability,
@@ -52,19 +51,21 @@ bool Edge::operator!=(const Edge &other) const {
 }
 size_t Edge::GetHash() const {
   size_t hash_value = std::hash<int>()(first);
-  std::hash_combine(hash_value, std::hash<int>()(second));
+  // boost::hash_combine is not associative, which is what we need for directed
+  // graphs.
+  boost::hash_combine(hash_value, std::hash<int>()(second));
   return hash_value;
 }
-
 
 SSPState::SSPState(int num_edges) {
   valid_bits.resize(num_edges, false);
   invalid_bits.resize(num_edges, false);
 }
-SSPState::SSPState(const SSPState& other) {
-  this->valid_bits = other.valid_bits;
-  this->invalid_bits = other.invalid_bits;
-}
+SSPState::SSPState(const SSPState &other) :
+  valid_bits{other.valid_bits},
+  invalid_bits{other.invalid_bits},
+  suboptimality_bound(other.suboptimality_bound) {}
+
 bool SSPState::operator==(const SSPState &other) const {
   return valid_bits == other.valid_bits && invalid_bits == other.invalid_bits;
 }
@@ -73,13 +74,12 @@ bool SSPState::operator!=(const SSPState &other) const {
 }
 size_t SSPState::GetHash() const {
   size_t hash_value = std::hash<dynamic_bitset>()(valid_bits);
-  std::hash_combine(hash_value, std::hash<dynamic_bitset>()(invalid_bits));
+  boost::hash_combine(hash_value, std::hash<dynamic_bitset>()(invalid_bits));
   return hash_value;
 }
 size_t SSPState::size() const {
   return valid_bits.size();
 }
-
 
 
 EdgeSelectorSSP::EdgeSelectorSSP() {
@@ -96,7 +96,8 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
 
     for (size_t jj = 0; jj < state_ids.size() - 1; ++jj) {
       const double edge_probability = paths[ii].edge_probabilities[jj];
-      const Edge edge(state_ids[jj], state_ids[jj + 1], edge_probability);
+      const double edge_eval_time = paths[ii].edge_eval_times[jj];
+      const Edge edge(state_ids[jj], state_ids[jj + 1], edge_probability, edge_eval_time);
 
       // cout << edge.first << " " << edge.second << endl;
       // cout << state_ids[jj] << " " << state_ids[jj+1] << endl;
@@ -257,17 +258,15 @@ int EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
 }
 
 int EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
-                                           const SSPState &child_state, int action_id) const {
-  const int parent_subopt_bound = GetSuboptimalityBound(parent_state);
-  const int child_subopt_bound = GetSuboptimalityBound(child_state);
+                                           const SSPState &child_state, int edge_id) const {
 
-  const Edge &edge = edge_hasher_.GetState(action_id);
+  const Edge &edge = edge_hasher_.GetState(edge_id);
   // Compute the area of the trapezoid formed by the parallel sides
   // with length parent_subopt_bound and child_subopt_bound, and height
   // edge.evaluation_time.
   const int cost = static_cast<int>(0.5 * kEdgeEvalTimeMultiplier *
-                                    edge.evaluation_time * static_cast<double>(parent_subopt_bound +
-                                                                               child_subopt_bound));
+                                    edge.evaluation_time * static_cast<double>(parent_state.suboptimality_bound +
+                                                                               child_state.suboptimality_bound));
   return cost;
 }
 
@@ -286,7 +285,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
                                std::vector<std::vector<int>> *succ_state_ids_map,
                                std::vector<std::vector<double>> *succ_state_probabilities_map,
                                std::vector<int> *action_ids,
-                               std::vector<std::vector<double>> *action_costs_map) {
+                               std::vector<std::vector<int>> *action_costs_map) {
   auto &parent_state = state_hasher_.GetState(state_id);
   succ_state_ids_map->clear();
   succ_state_probabilities_map->clear();
@@ -316,23 +315,25 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
 
     SSPState succ_optimistic = parent_state;
     succ_optimistic.valid_bits.set(ii, true);
+    succ_optimistic.suboptimality_bound = GetSuboptimalityBound(succ_optimistic);
     const double prob_optimistic = edge.probability;
-    const double cost_optimistic = ComputeTransitionCost(parent_state,
-                                                         succ_optimistic, ii);
+    const int cost_optimistic = ComputeTransitionCost(parent_state,
+                                                      succ_optimistic, ii);
     const int succ_optimistic_id = state_hasher_.GetStateIDForceful(
                                      succ_optimistic);
 
     SSPState succ_pessimistic = parent_state;
     succ_pessimistic.invalid_bits.set(ii, true);
+    succ_pessimistic.suboptimality_bound = GetSuboptimalityBound(succ_pessimistic);
     const double prob_pessimistic = 1 - edge.probability;
-    const double cost_pessimistic = ComputeTransitionCost(parent_state,
-                                                          succ_pessimistic, ii);
+    const int cost_pessimistic = ComputeTransitionCost(parent_state,
+                                                       succ_pessimistic, ii);
     const int succ_pessimistic_id = state_hasher_.GetStateIDForceful(
                                       succ_pessimistic);
 
-    vector<int> succ_states = {succ_optimistic_id, succ_optimistic_id};
-    vector<double> succ_probabilities = {prob_optimistic, prob_pessimistic};
-    vector<double> succ_costs = {cost_optimistic, cost_pessimistic};
+    const vector<int> succ_states{succ_optimistic_id, succ_pessimistic_id};
+    const vector<double> succ_probabilities{prob_optimistic, prob_pessimistic};
+    const vector<int> succ_costs{cost_optimistic, cost_pessimistic};
 
     succ_state_ids_map->push_back(succ_states);
     succ_state_probabilities_map->push_back(succ_probabilities);
@@ -340,3 +341,11 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
   }
 }
 } // namespace
+
+std::ostream &operator<< (std::ostream &stream,
+                          const sbpl::SSPState &ssp_state) {
+  stream << "Valid Bits:   " << ssp_state.valid_bits << endl;
+  stream << "Invalid Bits: " << ssp_state.invalid_bits << endl;
+  stream << "Subopt Bound: " << ssp_state.suboptimality_bound << endl;
+  return stream;
+}

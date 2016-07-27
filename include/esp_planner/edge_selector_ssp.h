@@ -11,31 +11,30 @@
 
 #define BOOST_DYNAMIC_BITSET_DONT_USE_FRIENDS
 
+#include <iostream>
 #include <sbpl_utils/hash_manager/hash_manager.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
 #include <boost/dynamic_bitset.hpp>
+#include <boost/functional/hash.hpp>
 
 using dynamic_bitset = boost::dynamic_bitset<>;
 
 namespace std {
-template <class T>
-inline void hash_combine(std::size_t &seed, const T &v) {
-  std::hash<T> hasher;
-  seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
+// Need this because boost doesn't define a hash function for dynamic_bitset.
 template <>
 struct hash<dynamic_bitset> {
   size_t operator()(const dynamic_bitset &bitset) const {
-    size_t res = 0;
+    size_t result = 0;
 
-    for (auto s : bitset.m_bits) {
-      hash_combine(res, s);
+    for (auto b : bitset.m_bits) {
+      // This needs to be non-associative (satisfied by boost::hash_combine).
+      boost::hash_combine(result, b);
     }
 
-    return res;
+    return result;
   }
 };
 }  // namespace std
@@ -102,10 +101,14 @@ class EdgeSelectorSSP {
   void GetSuccs(int state_id, std::vector<std::vector<int>> *succ_state_ids_map,
                 std::vector<std::vector<double>> *succ_state_probabilities_map,
                 std::vector<int> *action_ids,
-                std::vector<std::vector<double>> *action_costs_map);
+                std::vector<std::vector<int>> *action_costs_map);
   bool IsGoalState(int state_id) const;
   int GetGoalHeuristic(int state_id) const;
- private:
+
+  int NumStochasticEdges() const {
+    return static_cast<int>(edge_hasher_.Size());
+  }
+//  private:
   std::vector<Path> paths_;
   std::vector<SimplifiedPath> simplified_paths_;
   std::vector<BitVector> path_bit_vectors_;
@@ -131,6 +134,8 @@ class EdgeSelectorSSP {
                      int *upper_bound) const;
   int GetSuboptimalityBound(const SSPState &ssp_state) const;
   int ComputeTransitionCost(const SSPState &parent_state,
-                            const SSPState &child_state, int action_id) const;
+                            const SSPState &child_state, int edge_id) const;
 };
 } // namspace sbpl
+
+std::ostream &operator<< (std::ostream &stream, const sbpl::SSPState &ssp_state);
