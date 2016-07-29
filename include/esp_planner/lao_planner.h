@@ -10,6 +10,8 @@
  * plus several other improvements.
  */
 
+#include <sbpl_utils/hash_manager/hash_manager.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -32,27 +34,21 @@ namespace {
 namespace sbpl {
 
 struct PlannerState {
-  int state_id;
-  double v;
-  bool expanded;
+  int state_id = -1;
+  double v = 0;
+  bool expanded = false;
 
   // Successors indexed by action id
   std::vector<int> action_ids;
   std::vector<std::vector<int>> succ_state_ids_map;
   std::vector<std::vector<double>> succ_state_probabilities_map;
   std::vector<std::vector<double>> action_costs_map;
-  int parent_state_id;
-  int best_action_id;
-  int best_vec_idx; //Cached for convenience -- action_ids[best_vec_idx] = best_action_id
+  int parent_state_id = -1;
+  int best_action_id = -1;
+  int best_vec_idx = -1; //Cached for convenience -- action_ids[best_vec_idx] = best_action_id
 
-  PlannerState() {
-    state_id = -1;
-    v = 0;
-    expanded = false;
-    parent_state_id = -1;
-    best_action_id = -1;
-    best_vec_idx = -1;
-  }
+  PlannerState() = default;
+  PlannerState(const PlannerState& other) = default;
 
   PlannerState(int s_id, double v_val, int parent_s_id) {
     state_id = s_id;
@@ -62,33 +58,24 @@ struct PlannerState {
     best_action_id = -1;
     best_vec_idx = -1;
   }
-
-};
-
-// TODO: Use sbpl_utils::hash_manager
-struct StateHasher {
-  int operator() (const PlannerState &s) const {
-    return s.state_id;
+  bool operator==(const PlannerState &other) const {
+    return state_id == other.state_id;
   }
-};
-
-struct StateEqual {
-  bool operator() (const PlannerState &s1, const PlannerState &s2) const {
-    return (s1.state_id == s2.state_id);
+  bool operator!=(const PlannerState &other) const {
+    return !(*this == other);
+  }
+  size_t GetHash() const {
+    return static_cast<size_t>(state_id);
   }
 };
 
 struct PlannerStats {
-  int expansions;
-  double time;
-  int cost;
-  int num_backups;
-
-  PlannerStats() : expansions(-1),
-    time(-1.0),
-    cost(-1),
-    num_backups(-1) {
-  }
+  int expansions = -1;
+  double time = -1.0;
+  int cost = -1;
+  int num_backups = -1;
+  PlannerStats() = default;
+  PlannerStats(const PlannerStats& other) = default;
 };
 
 template<class AbstractMDP>
@@ -103,11 +90,11 @@ class LAOPlanner {
     return optimal_policy_map_;
   }
   
-
  private:
   std::shared_ptr<AbstractMDP> abstract_mdp_;
   int start_state_id_;
   PlannerStats planner_stats_;
+  sbpl_utils::HashManager<PlannerState> state_hasher_;
 
   // policy_map_ is the map for all states (some of which may not be reachable
   // from start), and optimal_policy_map_ is the final solution graph.
@@ -123,16 +110,8 @@ class LAOPlanner {
   /**@brief Reconstruct most likely path (actions lead to successor with highest transition probability)**/
   void ReconstructMostLikelyPath(std::vector<int> *state_ids,
                                  std::vector<int> *action_ids);
-  /**@brief Do value iteration on the best solution graph**/
+  /**@brief Do value iteration on the best solution graph. Not used currently.**/
   void SolutionValueIteration();
-
-  /**@brief Planner hash table**/
-  std::unordered_map<int, PlannerState> PlannerStateMap;
-  PlannerState StateIDToState(int state_id);
-  PlannerState *StateIDToMutableState(int state_id);
-
-  /**@Debug**/
-  void PrintPlannerStateMap();
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -167,7 +146,7 @@ void LAOPlanner<AbstractMDP>::DFSTraversal(std::vector<int> *traversal) {
 
   while (dfs_stack.size() != 0) {
     while (!terminal_state) {
-      PlannerState s = StateIDToState(dfs_stack.top());
+      PlannerState s = state_hasher_.GetState(dfs_stack.top());
       //printf("Top state id: %d", s.state_id);
       int best_vec_idx = s.best_vec_idx;
 
@@ -219,7 +198,7 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_
   state_ids->clear();
   action_ids->clear();
 
-  PlannerState current_state = PlannerStateMap[start_state_id_];
+  PlannerState current_state = state_hasher_.GetState(start_state_id_);
   assert(start_state_id_ == current_state.state_id);
   state_ids->push_back(current_state.state_id);
   action_ids->push_back(current_state.best_action_id);
@@ -234,7 +213,7 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_
     int optimistic_succ_id = -1;
 
     for (size_t ii = 0; ii < succ_state_ids.size(); ++ii) {
-      PlannerState s = PlannerStateMap[succ_state_ids[ii]];
+      PlannerState s = state_hasher_.GetState(succ_state_ids[ii]);
 
       if (s.v < min_val) {
         min_val = s.v;
@@ -249,7 +228,7 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_
       return;
     }
 
-    current_state = PlannerStateMap[optimistic_succ_id];
+    current_state = state_hasher_.GetState(optimistic_succ_id);
     //TODO: Check v-values are non-increasing
     state_ids->push_back(current_state.state_id);
 
@@ -273,7 +252,7 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
   state_ids->clear();
   action_ids->clear();
 
-  PlannerState current_state = PlannerStateMap[start_state_id_];
+  PlannerState current_state = state_hasher_.GetState(start_state_id_);
   assert(start_state_id_ == current_state.state_id);
   state_ids->push_back(current_state.state_id);
   action_ids->push_back(current_state.best_action_id);
@@ -302,7 +281,7 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
       return;
     }
 
-    current_state = PlannerStateMap[most_likely_succ_id];
+    current_state = state_hasher_.GetState(most_likely_succ_id);
     //TODO: Check v-values are non-increasing
     state_ids->push_back(current_state.state_id);
 
@@ -320,7 +299,7 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
 template <class AbstractMDP>
 bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int> *action_ids) {
   // Plan from scratch (assume goal changed)
-  PlannerStateMap.clear();
+  state_hasher_.Reset();
 
   if (!abstract_mdp_) {
     printf("[LAO Planner]: Environment is not defined\n");
@@ -329,7 +308,7 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
 
   PlannerState start_state(start_state_id_,
                            abstract_mdp_->GetGoalHeuristic(start_state_id_), -1);
-  PlannerStateMap[start_state_id_] = start_state;
+  state_hasher_.InsertState(start_state, start_state_id_);
 
   bool exists_non_terminal_states = true;
   planner_stats_.expansions = 0;
@@ -362,7 +341,7 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
        */
     // Iterate through and expand state and/or update V-values
     for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
-      PlannerState s = StateIDToState(dfs_traversal[ii]);
+      PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);
 
       // Ignore goal states
       // TODO: Update this. Search ends if state being expanded is a goal state
@@ -408,15 +387,13 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
           for (size_t jj = 0; jj < succ_state_ids_map[ii].size(); ++jj) {
             const int succ_id = succ_state_ids_map[ii][jj];
             // Skip successors that have already been generated
-            auto it = PlannerStateMap.find(succ_id);
-
-            if (it != PlannerStateMap.end()) {
+            if (state_hasher_.Exists(succ_id)) {
               continue;
             }
 
             PlannerState succ_state(succ_state_ids_map[ii][jj],
                                     abstract_mdp_->GetGoalHeuristic(succ_state_ids_map[ii][jj]), s.state_id);
-            PlannerStateMap[succ_id] = succ_state;
+            state_hasher_.InsertState(succ_state, succ_id);
           }
         }
       }
@@ -434,7 +411,7 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
         double expected_cost = 0;
 
         for (int kk = 0; kk < num_succs; ++kk) {
-          PlannerState succ_state = StateIDToState(s.succ_state_ids_map[jj][kk]);
+          PlannerState succ_state = state_hasher_.GetState(s.succ_state_ids_map[jj][kk]);
           expected_cost += ((succ_state.v + s.action_costs_map[jj][kk]) *
                             s.succ_state_probabilities_map[jj][kk]);
         }
@@ -460,13 +437,13 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
       policy_map_[s.state_id] = s.best_action_id;
 
       // Update the state in PlannerStateMap
-      PlannerStateMap[s.state_id] = s;
+      state_hasher_.UpdateState(s);
     }
   }
 
   clock_t end_time = clock();
   planner_stats_.time = double(end_time - begin_time) / CLOCKS_PER_SEC;
-  planner_stats_.cost = PlannerStateMap[start_state.state_id].v;
+  planner_stats_.cost = state_hasher_.GetState(start_state_id_).v;
 
   // Reconstruct path
   printf("[LAO Planner]: LAO* done, reconstructing optimal policy\n");
@@ -477,7 +454,7 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
   DFSTraversal(&dfs_traversal);
   printf("[LAO Planner]: Finished econstructing optimal policy\n");
   for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
-    PlannerState s = StateIDToState(dfs_traversal[ii]);
+    PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);
     if (s.best_action_id != -1) {
       optimal_policy_map_[s.state_id] = s.best_action_id;
     }
@@ -505,7 +482,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
     error = 0.0;
 
     for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
-      PlannerState s = StateIDToState(dfs_traversal[ii]);
+      PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);
       // Update V-values: V(s) = min_{a\in A}  \sum_{s'} (c(s,a,s') + V(s')) * P(s'|s,a)
       const int num_actions = s.succ_state_ids_map.size();
       assert(num_actions == int(s.succ_state_probabilities_map.size()));
@@ -519,7 +496,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
         double expected_cost = 0;
 
         for (int kk = 0; kk < num_succs; ++kk) {
-          PlannerState succ_state = StateIDToState(s.succ_state_ids_map[jj][kk]);
+          PlannerState succ_state = state_hasher_.GetState(s.succ_state_ids_map[jj][kk]);
           expected_cost += ((succ_state.v + s.action_costs_map[jj][kk]) *
                             s.succ_state_probabilities_map[jj][kk]);
         }
@@ -541,7 +518,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
       s.v = min_expected_cost;
 
       // Update the state in PlannerStateMap
-      PlannerStateMap[s.state_id] = s;
+      state_hasher_.UpdateState(s);
     }
 
     //printf("[LAO Planner]: VI Iteration %d, Error: %f", iter, error);
@@ -556,41 +533,5 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
 template <class AbstractMDP>
 PlannerStats LAOPlanner<AbstractMDP>::GetPlannerStats() {
   return planner_stats_;
-}
-
-
-template <class AbstractMDP>
-PlannerState LAOPlanner<AbstractMDP>::StateIDToState(int state_id) {
-  auto it = PlannerStateMap.find(state_id);
-
-  if (it != PlannerStateMap.end()) {
-    return it->second;
-  } else {
-    printf("LAO Planner: Error. Requested State ID does not exist. Will return empty state.\n");
-  }
-
-  PlannerState empty_state;
-  return empty_state;
-}
-
-template <class AbstractMDP>
-PlannerState *LAOPlanner<AbstractMDP>::StateIDToMutableState(int state_id) {
-  auto it = PlannerStateMap.find(state_id);
-
-  if (it != PlannerStateMap.end()) {
-    return &(it->second);
-  } else {
-    printf("LAO Planner: Error. Requested State ID does not exist. Will return empty state.\n");
-  }
-
-  return nullptr;
-}
-
-template <class AbstractMDP>
-void LAOPlanner<AbstractMDP>::PrintPlannerStateMap() {
-  for (auto it = PlannerStateMap.begin(); it != PlannerStateMap.end(); ++it) {
-    printf("ID: %d | V: %f | E: %d\n", it->first, it->second.v,
-             it->second.expanded);
-  }
 }
 } // namespace sbpl
