@@ -13,6 +13,7 @@
 #include <limits>
 
 #include <cassert>
+#include <fstream>
 
 using namespace std;
 
@@ -81,6 +82,20 @@ size_t SSPState::size() const {
   return valid_bits.size();
 }
 
+string SSPState::to_string() const {
+  string edge_statuses(valid_bits.size(), '-');
+
+  for (size_t ii = 0; ii < valid_bits.size(); ++ii) {
+    if (valid_bits.test(ii)) {
+      edge_statuses[ii] = '1';
+    } else if (invalid_bits.test(ii)) {
+      edge_statuses[ii] = '0';
+    }
+  }
+
+  return edge_statuses;
+}
+
 
 EdgeSelectorSSP::EdgeSelectorSSP() {
 
@@ -97,7 +112,8 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
     for (size_t jj = 0; jj < state_ids.size() - 1; ++jj) {
       const double edge_probability = paths[ii].edge_probabilities[jj];
       const double edge_eval_time = paths[ii].edge_eval_times[jj];
-      const Edge edge(state_ids[jj], state_ids[jj + 1], edge_probability, edge_eval_time);
+      const Edge edge(state_ids[jj], state_ids[jj + 1], edge_probability,
+                      edge_eval_time);
 
       // cout << edge.first << " " << edge.second << endl;
       // cout << state_ids[jj] << " " << state_ids[jj+1] << endl;
@@ -259,14 +275,15 @@ int EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
 }
 
 double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
-                                           const SSPState &child_state, int edge_id) const {
+                                              const SSPState &child_state, int edge_id) const {
 
   const Edge &edge = edge_hasher_.GetState(edge_id);
   // Compute the area of the trapezoid formed by the parallel sides
   // with length parent_subopt_bound and child_subopt_bound, and height
   // edge.evaluation_time.
-  const double cost = 0.5 * edge.evaluation_time * static_cast<double>(parent_state.suboptimality_bound +
-                                                                               child_state.suboptimality_bound);
+  const double cost = 0.5 * edge.evaluation_time * static_cast<double>
+                      (parent_state.suboptimality_bound +
+                       child_state.suboptimality_bound);
   return cost;
 }
 
@@ -318,7 +335,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     succ_optimistic.suboptimality_bound = GetSuboptimalityBound(succ_optimistic);
     const double prob_optimistic = edge.probability;
     const double cost_optimistic = ComputeTransitionCost(parent_state,
-                                                      succ_optimistic, ii);
+                                                         succ_optimistic, ii);
     const int succ_optimistic_id = state_hasher_.GetStateIDForceful(
                                      succ_optimistic);
 
@@ -327,7 +344,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     succ_pessimistic.suboptimality_bound = GetSuboptimalityBound(succ_pessimistic);
     const double prob_pessimistic = 1 - edge.probability;
     const double cost_pessimistic = ComputeTransitionCost(parent_state,
-                                                       succ_pessimistic, ii);
+                                                          succ_pessimistic, ii);
     const int succ_pessimistic_id = state_hasher_.GetStateIDForceful(
                                       succ_pessimistic);
 
@@ -340,12 +357,72 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     action_costs_map->push_back(succ_costs);
   }
 }
+
+void EdgeSelectorSSP::PrintPathsAsDOTGraph(const string &filename) const {
+  std::ofstream dot_file(filename.c_str());
+  dot_file << "digraph D {\n"
+           << "  rankdir=LR\n"
+           << "  size=\"4,3\"\n"
+           << "  ratio=\"fill\"\n"
+           << "  edge[style=\"bold\", labelfontcolor=\"black\"]\n"
+           << "  node[shape=\"circle\", style=\"filled\", fillcolor=\"green\"]\n";
+
+  int start_id = paths_[0].state_ids[0];
+  int goal_id = paths_[0].state_ids.back();
+
+  for (size_t ii = 0; ii < simplified_paths_.size(); ++ii) {
+    const auto &path = simplified_paths_[ii];
+    const int path_cost = paths_[ii].cost;
+    bool first_edge = true;
+    string parent_string("S"), succ_string;
+
+    for (int edge_id : path) {
+      const Edge edge = edge_hasher_.GetState(edge_id);
+
+      succ_string = std::to_string(edge_id);
+
+      std::stringstream edge_prob;
+      edge_prob << fixed << setprecision(2) << edge.probability;
+      dot_file << succ_string
+               << "[xlabel=<<font color=\"red\">" << edge_prob.str() << " </font>>]\n";
+
+      dot_file << parent_string << " -> " << succ_string
+               << "[label=\"" << " "  << "\"";
+      if (parent_string.compare("S") != 0) {
+        dot_file << ", style=\"dashed\"";
+      } else {
+        dot_file << ", label=\"" << std::to_string(path_cost) << "\"";
+      }
+
+      dot_file << "]\n";
+      parent_string = succ_string;
+    }
+
+    // Goal node.
+    if (!succ_string.empty()) {
+      dot_file << succ_string << " -> " << "G"
+               << "[label=\"" << "" << "\""
+               // << ",color=\"" << "red" << "\""
+               << "]\n";
+    } else {
+      dot_file << "S->G"
+               << "[label=\"" << std::to_string(path_cost) << "\"]\n";
+    }
+  }
+
+  dot_file << "S[fillcolor=\"red\"]\n";
+  dot_file << "G[fillcolor=\"red\"]\n";
+
+  dot_file << "}";
+
+}
 } // namespace
 
 std::ostream &operator<< (std::ostream &stream,
                           const sbpl::SSPState &ssp_state) {
-  stream << "Valid Bits:   " << ssp_state.valid_bits << endl;
-  stream << "Invalid Bits: " << ssp_state.invalid_bits << endl;
-  stream << "Subopt Bound: " << ssp_state.suboptimality_bound << endl;
+  // stream << "Valid Bits:   " << ssp_state.valid_bits << endl;
+  // stream << "Invalid Bits: " << ssp_state.invalid_bits << endl;
+  stream << "Edge Status:   " << ssp_state.to_string() << endl;
+  stream << "Subopt Bound: " << ssp_state.suboptimality_bound;
   return stream;
 }

@@ -92,16 +92,23 @@ class LAOPlanner {
   LAOPlanner(std::shared_ptr<AbstractMDP> abstract_mdp);
   ~LAOPlanner();
   void SetStart(int start_state_id);
-  void SetGoal(int goal_state_id);
   bool Plan(std::vector<int> *state_ids, std::vector<int> *action_ids = nullptr);
   PlannerStats GetPlannerStats();
+  const std::unordered_map<int, int> &GetPolicyMap() {
+    return optimal_policy_map_;
+  }
+  
 
  private:
   std::shared_ptr<AbstractMDP> abstract_mdp_;
   int start_state_id_;
-  //TODO: remove goal state ID.
-  int goal_state_id_;
   PlannerStats planner_stats_;
+
+  // policy_map_ is the map for all states (some of which may not be reachable
+  // from start), and optimal_policy_map_ is the final solution graph.
+  // Mapping from state ID to action ID.
+  std::unordered_map<int, int> policy_map_; 
+  std::unordered_map<int, int> optimal_policy_map_; 
 
   /**@brief Return a postorder DFS traversal (state ids) of the best solution graph**/
   void DFSTraversal(std::vector<int> *traversal);
@@ -131,7 +138,6 @@ class LAOPlanner {
 template <class AbstractMDP>
 LAOPlanner<AbstractMDP>::LAOPlanner(std::shared_ptr<AbstractMDP> abstract_mdp) {
   start_state_id_ = -1;
-  goal_state_id_ = -1;
   abstract_mdp_ = abstract_mdp;
 }
 
@@ -142,12 +148,6 @@ LAOPlanner<AbstractMDP>::~LAOPlanner() {
 template <class AbstractMDP>
 void LAOPlanner<AbstractMDP>::SetStart(int start_state_id) {
   start_state_id_ = start_state_id;
-  return;
-}
-
-template <class AbstractMDP>
-void LAOPlanner<AbstractMDP>::SetGoal(int goal_state_id) {
-  goal_state_id_ = goal_state_id;
   return;
 }
 
@@ -324,7 +324,6 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
 
   PlannerState start_state(start_state_id_,
                            abstract_mdp_->GetGoalHeuristic(start_state_id_), -1);
-  PlannerState goal_state(goal_state_id_, 0, -1);
   PlannerStateMap[start_state_id_] = start_state;
 
   bool exists_non_terminal_states = true;
@@ -360,11 +359,9 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
       // TODO: Update this. Search ends if state being expanded is a goal state
       if (abstract_mdp_->IsGoalState(s.state_id)) {
         //printf("[LAO Planner]: Goal state has been found\n");
-        exists_non_terminal_states = false;
-        goal_state_id_ = s.state_id;
-        goal_state = s;
-        break;
-        //continue;
+        // exists_non_terminal_states = false;
+        // break;
+        continue;
       }
 
       // Expand the state if not already expanded
@@ -444,6 +441,9 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
       s.best_vec_idx = best_idx;
       s.v = min_expected_cost;
 
+      // Update policy map.
+      policy_map_[s.state_id] = s.best_action_id;
+
       // Update the state in PlannerStateMap
       PlannerStateMap[s.state_id] = s;
     }
@@ -512,6 +512,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
       s.best_vec_idx = best_idx;
       error += fabs(s.v - min_expected_cost);
       s.v = min_expected_cost;
+      optimal_policy_map_[s.state_id] = s.best_action_id;
 
       // Update the state in PlannerStateMap
       PlannerStateMap[s.state_id] = s;

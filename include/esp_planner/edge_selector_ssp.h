@@ -11,8 +11,10 @@
 
 #define BOOST_DYNAMIC_BITSET_DONT_USE_FRIENDS
 
-#include <iostream>
 #include <sbpl_utils/hash_manager/hash_manager.h>
+
+#include <iostream>
+#include <string>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
@@ -88,6 +90,7 @@ struct SSPState {
   bool operator!=(const SSPState &other) const;
   size_t GetHash() const;
   size_t size() const;
+  std::string to_string() const;
 };
 
 
@@ -108,6 +111,8 @@ class EdgeSelectorSSP {
   int NumStochasticEdges() const {
     return static_cast<int>(edge_hasher_.Size());
   }
+  void PrintPathsAsDOTGraph(const std::string &filename) const;
+
 //  private:
   std::vector<Path> paths_;
   std::vector<SimplifiedPath> simplified_paths_;
