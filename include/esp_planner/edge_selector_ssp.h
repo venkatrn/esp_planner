@@ -91,6 +91,7 @@ struct SSPState {
   size_t GetHash() const;
   size_t size() const;
   std::string to_string() const;
+  std::vector<int> GetUnevaluatedEdges() const;
 };
 
 
@@ -106,7 +107,7 @@ class EdgeSelectorSSP {
                 std::vector<int> *action_ids,
                 std::vector<std::vector<double>> *action_costs_map);
   bool IsGoalState(int state_id) const;
-  int GetGoalHeuristic(int state_id) const;
+  double GetGoalHeuristic(int state_id) const;
 
   int NumStochasticEdges() const {
     return static_cast<int>(edge_hasher_.Size());

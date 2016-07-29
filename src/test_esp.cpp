@@ -15,7 +15,7 @@ const string kDefaultDebugDir =
 }
 
 void PrintPolicyAndPathsAsDOTGraph(const string &name, const string &dir,
-                                const unordered_map<int, int> &policy_map, const EdgeSelectorSSP &ssp) {
+                                   const unordered_map<int, int> &policy_map, const EdgeSelectorSSP &ssp) {
   const string policy_file = dir + "/" + name + "_policy.dot";
   std::ofstream dot_file(policy_file);
   dot_file << "digraph D {\n"
@@ -144,10 +144,27 @@ void test2(std::shared_ptr<EdgeSelectorSSP> ssp) {
   ssp->SetPaths(paths);
 }
 
+void test3(std::shared_ptr<EdgeSelectorSSP> ssp) {
+  const int num_paths = 15;
+  vector<Path> paths(num_paths);
+
+  for (int ii = 0; ii < num_paths; ++ii) {
+    Path p;
+    p.edge_probabilities = {static_cast<double>(ii) / (num_paths - 1), 1.0};
+    p.edge_eval_times = {1.0, 1.0};
+    p.state_ids = {0, ii + 1, 10000};
+    p.cost = 100 * (ii + 1);
+    paths[ii] = p;
+  }
+
+  ssp->SetPaths(paths);
+}
+
 int main(int argc, char **argv) {
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
   // test1(ssp);
   test2(ssp);
+  // test3(ssp);
 
   const int num_edges = ssp->NumStochasticEdges();
   SSPState start_state(num_edges);
@@ -195,6 +212,13 @@ int main(int argc, char **argv) {
 
   cout << endl;
 
+  printf("Planner Statistics:\n");
+  const auto &planner_stats = lao_planner.GetPlannerStats();
+  cout << "Time: " << planner_stats.time << " |  Expansions: " <<
+       planner_stats.expansions << " |  Cost: " << planner_stats.cost <<
+       " |  Backups: " << planner_stats.num_backups << endl;
+
+  // Print the policy and original paths to a DOT file for visualization.
   PrintPolicyAndPathsAsDOTGraph("test1", kDefaultDebugDir, policy_map, *ssp);
 
   return 0;

@@ -96,6 +96,17 @@ string SSPState::to_string() const {
   return edge_statuses;
 }
 
+vector<int> SSPState::GetUnevaluatedEdges() const {
+  vector<int> unevaluated_edges;
+  unevaluated_edges.reserve(size());
+  const BitVector evaluated_edges = valid_bits | invalid_bits;
+  for (size_t ii = 0; ii < size(); ++ii) {
+     if (!evaluated_edges.test(ii)) {
+       unevaluated_edges.push_back(static_cast<int>(ii));
+     }
+  }
+  return unevaluated_edges;
+}
 
 EdgeSelectorSSP::EdgeSelectorSSP() {
 
@@ -289,13 +300,20 @@ double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
 
 bool EdgeSelectorSSP::IsGoalState(int state_id) const {
   auto &ssp_state = state_hasher_.GetState(state_id);
-  const int suboptimality_bound = GetSuboptimalityBound(ssp_state);
-  return (suboptimality_bound == 0);
+  return (ssp_state.suboptimality_bound == 0);
 }
 
-int EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {
-  // TODO: implement.
-  return 0;
+double EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {
+  // return 0;
+  auto &ssp_state = state_hasher_.GetState(state_id);
+  const vector<int> unevaluated_edges = ssp_state.GetUnevaluatedEdges();
+  double min_eval_time = std::numeric_limits<double>::max();
+  for (int edge_id : unevaluated_edges) {
+    const Edge &edge = edge_hasher_.GetState(edge_id);
+    min_eval_time = std::min(min_eval_time, edge.evaluation_time);
+  }
+  // TODO: implement more informed heuristic.
+  return 0.5 * min_eval_time * ssp_state.suboptimality_bound;
 }
 
 void EdgeSelectorSSP::GetSuccs(int state_id,

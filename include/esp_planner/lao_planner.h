@@ -21,9 +21,12 @@
 #include <vector>
 
 namespace {
-  const int kMaxPlannerExpansions = 10000;
+  constexpr int kMaxPlannerExpansions = 100000;
   // Tolerance for comparing double numbers.
-  const double kDblTolerance = 1e-4;
+  constexpr double kDblTolerance = 1e-4;
+  // LAO* will terminate when total residual of the best solution graph is less
+  // than this value (and when no non-terminal states exist).
+  constexpr double kMaxResidualForTermination = 1e-3;
 } // namespace
 
 namespace sbpl {
@@ -51,7 +54,7 @@ struct PlannerState {
     best_vec_idx = -1;
   }
 
-  PlannerState(int s_id, int v_val, int parent_s_id) {
+  PlannerState(int s_id, double v_val, int parent_s_id) {
     state_id = s_id;
     v = v_val;
     expanded = false;
@@ -79,10 +82,12 @@ struct PlannerStats {
   int expansions;
   double time;
   int cost;
+  int num_backups;
 
   PlannerStats() : expansions(-1),
     time(-1.0),
-    cost(-1) {
+    cost(-1),
+    num_backups(-1) {
   }
 };
 
@@ -290,7 +295,7 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
       }
     }
 
-    assert(optimistic_succ_id != -1);
+    assert(most_likely_succ_id != -1);
 
     if (current_state.state_id == most_likely_succ_id) {
       printf("[LAO Planner]: Error in path reconstruction. Most likely successor has same ID has current state ");
@@ -328,9 +333,13 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
 
   bool exists_non_terminal_states = true;
   planner_stats_.expansions = 0;
+  planner_stats_.num_backups = 0;
   clock_t begin_time = clock();
 
-  while (exists_non_terminal_states) {
+  double total_residual = std::numeric_limits<double>::max();
+  while (exists_non_terminal_states || total_residual > kMaxResidualForTermination) {
+    // Reset residual to 0 for this iteration.
+    total_residual = 0;
     if (planner_stats_.expansions > kMaxPlannerExpansions) {
       printf("[LAO Planner]: Exceeded max expansion. Returning optimistic path anyway.\n");
       break;
@@ -436,6 +445,12 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
         }
       }
 
+      
+      ++planner_stats_.num_backups;
+
+      // Add residual(s) to the total residual.
+      total_residual += fabs(s.v - min_expected_cost);
+
       assert(best_idx != -1);
       s.best_action_id = s.action_ids[best_idx];
       s.best_vec_idx = best_idx;
@@ -454,9 +469,21 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
   planner_stats_.cost = PlannerStateMap[start_state.state_id].v;
 
   // Reconstruct path
-  printf("[LAO Planner]: Finished planning\n");
-  SolutionValueIteration();
-  //printf("[LAO Planner]: Finished value iteration");
+  printf("[LAO Planner]: LAO* done, reconstructing optimal policy\n");
+
+  // DFS traversal of the final solution graph after convergence is the optimal
+  // policy.
+  std::vector<int> dfs_traversal;
+  DFSTraversal(&dfs_traversal);
+  printf("[LAO Planner]: Finished econstructing optimal policy\n");
+  for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
+    PlannerState s = StateIDToState(dfs_traversal[ii]);
+    if (s.best_action_id != -1) {
+      optimal_policy_map_[s.state_id] = s.best_action_id;
+    }
+  }
+  // SolutionValueIteration();
+
   // ReconstructOptimisticPath(state_ids, action_ids);
   ReconstructMostLikelyPath(state_ids, action_ids);
   // PrintPlannerStateMap();
@@ -468,7 +495,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
   // Get the DFS traversal of the best partial solution graph
   std::vector<int> dfs_traversal;
   DFSTraversal(&dfs_traversal);
-  const int max_iter = 100;
+  const int max_iter = 0;
   const double error_tol = 1e-3;
   double error = std::numeric_limits<double>::max();
   int iter = 0;
@@ -479,7 +506,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
 
     for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
       PlannerState s = StateIDToState(dfs_traversal[ii]);
-      // Update V-values: V(s) = min_{a\in A} c(s,a) + \sum_{s'} P(s'|s,a)*V(s')
+      // Update V-values: V(s) = min_{a\in A}  \sum_{s'} (c(s,a,s') + V(s')) * P(s'|s,a)
       const int num_actions = s.succ_state_ids_map.size();
       assert(num_actions == int(s.succ_state_probabilities_map.size()));
       assert(num_actions == int(s.action_ids.size()));
@@ -512,7 +539,6 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
       s.best_vec_idx = best_idx;
       error += fabs(s.v - min_expected_cost);
       s.v = min_expected_cost;
-      optimal_policy_map_[s.state_id] = s.best_action_id;
 
       // Update the state in PlannerStateMap
       PlannerStateMap[s.state_id] = s;
