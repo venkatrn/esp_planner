@@ -7,7 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS sbpl_utils)
+find_package(catkin REQUIRED COMPONENTS sbpl sbpl_utils)
 
 ## System dependencies are found with CMake's conventions
 find_package(Boost REQUIRED COMPONENTS system)
@@ -26,7 +26,7 @@ find_package(Boost REQUIRED COMPONENTS system)
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES esp_planner
- CATKIN_DEPENDS sbpl_utils
+ CATKIN_DEPENDS sbpl sbpl_utils 
 #  DEPENDS system_lib
 )
 
@@ -39,9 +39,13 @@ catkin_package(
 include_directories(include ${catkin_INCLUDE_DIRS})
 
 add_library(esp_planner
+  src/esp_structs.cpp
   src/edge_selector_ssp.cpp
   src/lao_planner.cpp
+  src/esp_planner.cpp
+  src/esp_environment.cpp
 )
+target_link_libraries(esp_planner ${catkin_LIBRARIES})
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
@@ -50,6 +54,6 @@ add_library(esp_planner
 
 ## Declare a C++ executable
 add_executable(esp_test src/test_esp.cpp)
-add_dependencies(esp_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+# add_dependencies(esp_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(esp_test
   esp_planner)

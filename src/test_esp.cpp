@@ -163,8 +163,8 @@ void test3(std::shared_ptr<EdgeSelectorSSP> ssp) {
 int main(int argc, char **argv) {
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
   // test1(ssp);
-  test2(ssp);
-  // test3(ssp);
+  // test2(ssp);
+  test3(ssp);
 
   const int num_edges = ssp->NumStochasticEdges();
   SSPState start_state(num_edges);
