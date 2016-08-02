@@ -512,7 +512,7 @@ int ESPPlanner::replan(vector<int> *solution_stateIDs_V, ReplanParams p,
 }
 
 int ESPPlanner::set_goal(int id) {
-  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id);
+  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id, 1.0);
   printf("planner: setting env goal to %d and wrapper goal to %d\n", id, wrapper_goal_id);
 
   if (bforwardsearch) {
@@ -525,7 +525,7 @@ int ESPPlanner::set_goal(int id) {
 }
 
 int ESPPlanner::set_start(int id) {
-  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id);
+  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 1.0);
   printf("planner: setting env start to %d and wrapper start to %d\n", id, wrapper_start_id);
 
   if (bforwardsearch) {
