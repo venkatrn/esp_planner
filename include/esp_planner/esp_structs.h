@@ -1,7 +1,9 @@
 #pragma once
 
-#include <cstdio>
+#include <iostream>
 #include <vector>
+
+#include <cstdio>
 
 namespace sbpl {
 struct Edge {
@@ -17,6 +19,8 @@ struct Edge {
   bool operator!=(const Edge &other) const;
   size_t GetHash() const;
 };
+
+std::ostream &operator<< (std::ostream &stream, const Edge &edge);
 
 struct Path {
   // Path includes start and goal state IDs.

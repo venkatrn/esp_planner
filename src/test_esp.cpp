@@ -1,9 +1,11 @@
 #include <esp_planner/edge_selector_ssp.h>
 #include <esp_planner/lao_planner.h>
+#include <esp_planner/esp_utils.h>
+#include <esp_planner/esp_planner.h>
 #include <ros/package.h>
 
 #include <iostream>
-#include <fstream>
+#include <memory>
 
 using namespace sbpl;
 using namespace std;
@@ -14,75 +16,79 @@ const string kDefaultDebugDir =
   "/usr0/home/venkatrn/indigo_workspace/src/esp_planner/visualization/";
 }
 
-void PrintPolicyAndPathsAsDOTGraph(const string &name, const string &dir,
-                                   const unordered_map<int, int> &policy_map, const EdgeSelectorSSP &ssp) {
-  const string policy_file = dir + "/" + name + "_policy.dot";
-  std::ofstream dot_file(policy_file);
-  dot_file << "digraph D {\n"
-           << "  rankdir=LR\n"
-           << "  size=\"4,3\"\n"
-           << "  ratio=\"fill\"\n"
-           << "  edge[style=\"bold\", labelfontcolor=\"red\"]\n"
-           << "  node[shape=\"circle\"]\n";
+void test_planner() {
+  StochasticGraph g(6);
 
-  for (const auto &element : policy_map) {
-    const int state_id = element.first;
-    const SSPState state = ssp.state_hasher_.GetState(state_id);
-    const int action_id = element.second;
-    const Edge edge = ssp.edge_hasher_.GetState(action_id);
+  // (from, to, cost, probability of existence, evaluation time)
+  // 3 lazy paths to goal.
+  // vector<vector<double>> edges = {
+  //   {0, 1, 10, 0.1, 1.3},
+  //   {1, 2, 10, 1.0, 1.5},
+  //   {2, 3, 10, 1.0, 2.5},
+  //   {3, 4, 10, 0.6, 3.5},
+  //   {4, 5, 10, 1.0, 0.1},
+  //
+  //   {0, 5, 20, 0.5, 1.0},
+  //
+  //   {0, 3, 20, 1.0, 1.0},
+  //   {3, 5, 20, 1.0, 1.0}
+  // };
 
-    string parent_string = state.to_string();
-    // Edge valid outcome
-    string valid_string = parent_string;
-    string invalid_string = state.to_string();
-    valid_string.replace(action_id, 1, 1, '1');
-    invalid_string.replace(action_id, 1, 1, '0');
-    parent_string = "\"" + parent_string + "\"";
-    valid_string = "\"" + valid_string + "\"";
-    invalid_string = "\"" + invalid_string + "\"";
+  // 5 lazy paths to goal.
+  vector<vector<double>> edges = {
+    {0, 1, 1, 0.1, 1.3},
+    {1, 2, 1, 1.0, 1.5},
+    {2, 3, 1, 1.0, 2.5},
+    {3, 4, 1, 0.6, 3.5},
+    {4, 5, 1, 1.0, 0.1},
 
-    // Best-action label for each node
-    dot_file << parent_string
-             << "[xlabel=<<font color=\"red\">" << std::to_string(action_id) + "</font>>"
-             << "]\n";
+    {0, 5, 100, 1.0, 1.0},
 
-    // dot_file << parent_string << " -> " << valid_string
-    //   << "[taillabel=\"" << std::to_string(action_id) << "\", label=\"" << "1" << "\"";
-    std::stringstream valid_edge_prob;
-    valid_edge_prob << fixed << setprecision(2) << edge.probability;
-    dot_file << parent_string << " -> " << valid_string
-             << "[label=\"" << valid_edge_prob.str() << "\"";
+    {1, 5, 1, 0.1, 1.0},
+    {2, 5, 1, 0.1, 1.0},
+    {3, 5, 1, 0.1, 1.0},
+  };
 
-    if (edge.probability >= 0.5) {
-      dot_file << ", color=\"black\"";
-    } else {
-      dot_file << ", color=\"grey\"";
-    }
+  vector<vector<int>> heuristics = {
+    {0, 0},
+    {1, 0},
+    {2, 0},
+    {3, 0},
+    {4, 0},
+    {5, 0},
+  };
 
-    dot_file << "]\n";
+  auto edge_bundle_map = get(bo::edge_bundle, g);
 
-    // Edge invalid outcome
-    std::stringstream invalid_edge_prob;
-    invalid_edge_prob << fixed << setprecision(2) << (1 - edge.probability);
-    dot_file << parent_string << " -> " << invalid_string
-             << "[label=\"" << invalid_edge_prob.str() << "\"";
-
-    if (edge.probability < 0.5) {
-      dot_file << ", color=\"black\"";
-    } else {
-      dot_file << ", color=\"grey\"";
-    }
-
-    dot_file << "]\n";
-
-
+  for (const auto &edge : edges) {
+    auto& edge_properties = edge_bundle_map[add_edge(edge[0], edge[1], g).first];
+    edge_properties.cost = static_cast<int>(edge[2]);
+    edge_properties.probability = edge[3];
+    edge_properties.evaluation_time = edge[4];
   }
 
-  dot_file << "}";
+  for (const auto &heuristic : heuristics) {
+    g[heuristic[0]].heuristic = heuristic[1];
+  }
 
-  // Print the paths.
-  const string paths_file = dir + "/" + name + "_paths.dot";
-  ssp.PrintPathsAsDOTGraph(paths_file);
+  EnvBGStochastic bg_env(g);
+  unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, true)); 
+  // unique_ptr<SBPLPlanner> planner(new LazyARAPlanner(&bg_env, true)); 
+  planner->set_start(0);
+  planner->set_goal(5);
+  ReplanParams params(1.0);
+  params.initial_eps = 1.0;
+  params.final_eps = 1.0;
+  params.return_first_solution = true;
+  // vector<int> solution_ids;
+  vector<sbpl::Path> solution_paths;
+  int solution_cost = 0;
+  planner->replan(&solution_paths, params, &solution_cost);
+  printf("Found solution with cost %d:\n", solution_cost);
+  for (size_t ii = 0; ii < solution_paths.size(); ++ii) {
+    cout << solution_paths[ii].cost << " ";
+  }
+  cout << endl;
 }
 
 // Common edge in p2 and p3.
@@ -164,7 +170,9 @@ int main(int argc, char **argv) {
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
   // test1(ssp);
   // test2(ssp);
-  test3(ssp);
+  // test3(ssp);
+  test_planner();
+  return 0;
 
   const int num_edges = ssp->NumStochasticEdges();
   SSPState start_state(num_edges);

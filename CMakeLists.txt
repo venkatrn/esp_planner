@@ -40,6 +40,7 @@ include_directories(include ${catkin_INCLUDE_DIRS})
 
 add_library(esp_planner
   src/esp_structs.cpp
+  src/esp_utils.cpp
   src/edge_selector_ssp.cpp
   src/lao_planner.cpp
   src/esp_planner.cpp

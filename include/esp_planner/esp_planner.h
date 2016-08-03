@@ -30,6 +30,7 @@
 #pragma once
 
 #include <esp_planner/esp_environment.h>
+#include <esp_planner/esp_structs.h>
 
 #include <sbpl/headers.h>
 #include <queue>
@@ -66,6 +67,8 @@ class ESPPlanner : public SBPLPlanner {
                      ReplanParams params, int *solcost);
   virtual int replan(std::vector<int> *solution_stateIDs_V, ReplanParams params);
   virtual int replan(std::vector<int> *solution_stateIDs_V, ReplanParams params,
+                     int *solcost);
+  virtual int replan(std::vector<sbpl::Path> *paths, ReplanParams params,
                      int *solcost);
 
   void interrupt();
@@ -142,7 +145,7 @@ class ESPPlanner : public SBPLPlanner {
 
   virtual int ImprovePath();
 
-  virtual std::vector<int> GetSearchPath(int &solcost);
+  virtual std::vector<int> GetSearchPath(int state_id, int &solcost);
 
   virtual bool outOfTime();
   virtual void initializeSearch();

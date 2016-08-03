@@ -220,7 +220,7 @@ int ESPPlanner::ImprovePath() {
   return 1;
 }
 
-vector<int> ESPPlanner::GetSearchPath(int &solcost) {
+vector<int> ESPPlanner::GetSearchPath(int state_id, int &solcost) {
   vector<int> SuccIDV;
   vector<int> CostV;
   vector<int> wholePathIds;
@@ -232,11 +232,11 @@ vector<int> ESPPlanner::GetSearchPath(int &solcost) {
   ESPState *final_state;
 
   if (bforwardsearch) {
-    state = goal_state;
+    state = GetState(state_id);
     final_state = start_state;
   } else {
     state = start_state;
-    final_state = goal_state;
+    final_state = GetState(state_id);
   }
 
   wholePathIds.push_back(state->id);
@@ -281,7 +281,7 @@ vector<int> ESPPlanner::GetSearchPath(int &solcost) {
   }
 
   //if we searched forward then the path reconstruction
-  //worked backward from the goal, so we have to reverse the path
+  //worked backward from the final state, so we have to reverse the path
   if (bforwardsearch) {
     //in place reverse
     for (unsigned int i = 0; i < wholePathIds.size() / 2; i++) {
@@ -421,7 +421,7 @@ bool ESPPlanner::Search(vector<int> &pathIds, int &PathCost) {
 
   printf("solution found\n");
   clock_t before_reconstruct = clock();
-  pathIds = GetSearchPath(PathCost);
+  pathIds = GetSearchPath(goal_state_id, PathCost);
   reconstructTime = double(clock() - before_reconstruct) / CLOCKS_PER_SEC;
   totalTime = totalPlanTime + reconstructTime;
 
@@ -511,8 +511,62 @@ int ESPPlanner::replan(vector<int> *solution_stateIDs_V, ReplanParams p,
   return (int)solnFound;
 }
 
+int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
+                       int *solcost) {
+  printf("planner: replan called\n");
+  params = p;
+  use_repair_time = params.repair_time >= 0;
+  interruptFlag = false;
+
+  if (goal_state_id < 0) {
+    printf("ERROR searching: no goal state set\n");
+    return 0;
+  }
+
+  if (start_state_id < 0) {
+    printf("ERROR searching: no start state set\n");
+    return 0;
+  }
+
+  //plan
+  vector<int> pathIds;
+  int PathCost;
+  bool solnFound = Search(pathIds, PathCost);
+  printf("total expands=%d planning time=%.3f reconstruct path time=%.3f total time=%.3f solution cost=%d\n",
+         totalExpands, totalPlanTime, reconstructTime, totalTime, goal_state->g);
+
+  //copy the solution
+  // *solution_stateIDs_V = pathIds;
+  *solcost = PathCost;
+
+  // Get all paths.
+  vector<int> all_goal_wrapper_ids = environment_wrapper_->GetAllGoalWrapperIDs(goal_state_id);
+  solution_paths->clear();
+  solution_paths->reserve(all_goal_wrapper_ids.size());
+  for (size_t ii = 0; ii < all_goal_wrapper_ids.size(); ++ii) {
+    // Ignore a path to goal if it has not been marked as expanded.
+    auto search_state = GetState(all_goal_wrapper_ids[ii]);
+    if(search_state->g != search_state->v) {
+      continue;
+    }
+    
+    int path_cost = 0;
+    vector<int> wrapper_ids_path = GetSearchPath(all_goal_wrapper_ids[ii], path_cost);
+    auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(wrapper_ids_path);
+    solution_path.cost = path_cost;
+    solution_paths->push_back(solution_path);
+  }
+  printf("There are %d paths to the goal\n", static_cast<int>(solution_paths->size()));
+  environment_wrapper_->wrapper_state_hasher_.Print();
+
+  start_state_id = -1;
+  goal_state_id = -1;
+
+  return (int)solnFound;
+}
+
 int ESPPlanner::set_goal(int id) {
-  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id, 1.0);
+  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id, -1.0);
   printf("planner: setting env goal to %d and wrapper goal to %d\n", id, wrapper_goal_id);
 
   if (bforwardsearch) {

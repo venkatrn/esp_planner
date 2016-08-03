@@ -36,4 +36,9 @@ size_t Edge::GetHash() const {
   boost::hash_combine(hash_value, std::hash<int>()(second));
   return hash_value;
 }
+
+std::ostream &operator<< (std::ostream &stream, const Edge &edge) {
+  stream << "(" << edge.first << ", " << edge.second << ")";
+  return stream;
+}
 } // namespace sbpl

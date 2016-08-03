@@ -15,6 +15,15 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                           std::vector<int> *costs, std::vector<double> *edge_probabilities,
                           std::vector<double> *edge_eval_times, std::vector<int> *edge_groups) {
 
+  if (succs_cache_.find(parent_id) != succs_cache_.end()) {
+    *succ_ids = succs_cache_[parent_id];
+    *costs = costs_cache_[parent_id];
+    *edge_probabilities = probs_cache_[parent_id];
+    *edge_eval_times = time_cache_[parent_id];
+    edge_groups->clear();
+    return;
+  }
+
   const auto &parent_wrapper = wrapper_state_hasher_.GetState(parent_id);
   set<int> parent_lazy_edges = parent_wrapper.lazy_edges;
   const int orig_parent_id = WrapperToStateID(parent_id);
@@ -29,13 +38,15 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   for (size_t ii = 0; ii < orig_succ_ids.size(); ++ii) {
     auto succ_lazy_edges = parent_lazy_edges;
 
+    // TODO: we could hash only stochastic edges. Would need to update
+    // ConvertWrapperIDsToSBPLPath accordingly.
+    Edge edge(orig_parent_id, orig_succ_ids[ii], edge_probabilities->at(ii),
+              edge_eval_times->at(ii));
+    const int edge_id = edge_hasher_.GetStateIDForceful(edge);
     // We have a stochastic edge.
     if (edge_probabilities->at(ii) < 1.0 - kDblTolerance) {
-      Edge edge(orig_parent_id, orig_succ_ids[ii], edge_probabilities->at(ii),
-                edge_eval_times->at(ii));
       // TODO: check self-consistency.
       // TODO: use edge_group info here if available.
-      const int edge_id = edge_hasher_.GetStateIDForceful(edge);
       succ_lazy_edges.insert(edge_id);
     } else {
       edge_probabilities->at(ii) = 1.0;
@@ -47,6 +58,10 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                                                   succ_lazy_edges);
     succ_ids->at(ii) = wrapper_succ_id;
   }
+  succs_cache_[parent_id] = *succ_ids;
+  costs_cache_[parent_id] = *costs;
+  probs_cache_[parent_id] = *edge_probabilities;
+  time_cache_[parent_id] = *edge_eval_times;
 }
 
 void EnvWrapper::GetPreds(int parent_id, std::vector<int> *succ_ids,
@@ -100,15 +115,51 @@ int EnvWrapper::WrapperToStateID(int wrapper_id) const {
 int EnvWrapper::GetWrapperStateID(int state_id, double prob,
                                   const std::set<int> &lazy_edges /*= empty set*/) {
   WrapperState wrapper(state_id, prob, lazy_edges);
+  wrapper.creation_time = static_cast<double>(wrapper_state_hasher_.Size());
   int wrapper_state_id = 0;
 
-  if (wrapper_state_hasher_.Exists(wrapper_state_id)) {
+  if (wrapper_state_hasher_.Exists(wrapper)) {
     wrapper_state_id = wrapper_state_hasher_.GetStateID(wrapper);
   } else {
-    wrapper.creation_time = clock();
+    wrapper.creation_time = static_cast<double>(wrapper_state_hasher_.Size());
     wrapper_state_id = wrapper_state_hasher_.GetStateIDForceful(wrapper);
     wrapper_to_state_id_[wrapper_state_id] = state_id;
   }
 
   return wrapper_state_id;
+}
+
+std::vector<int> EnvWrapper::GetAllGoalWrapperIDs(int goal_wrapper_id) {
+  int orig_state_id = WrapperToStateID(goal_wrapper_id);
+  vector<int> state_wrapper_ids = StateToWrapperIDs(orig_state_id);
+  return state_wrapper_ids;
+}
+
+sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>& wrapper_ids_path) {
+  sbpl::Path path;
+  const size_t num_states = wrapper_ids_path.size();
+  path.state_ids.resize(num_states);
+  path.edge_probabilities.resize(num_states - 1);
+  path.edge_eval_times.resize(num_states - 1);
+  for (size_t ii = 0; ii < num_states - 1; ++ii) {
+    int s1_id = WrapperToStateID(wrapper_ids_path[ii]);
+    int s2_id = WrapperToStateID(wrapper_ids_path[ii + 1]);
+    sbpl::Edge temp_edge(s1_id, s2_id);
+    const auto &edge = edge_hasher_.GetState(edge_hasher_.GetStateID(temp_edge));
+    path.state_ids[ii] = s1_id;
+    path.edge_probabilities[ii] = edge.probability;
+    path.edge_eval_times[ii] = edge.evaluation_time;
+  }
+  // Add the final state to the path.
+  path.state_ids[num_states - 1] = WrapperToStateID(wrapper_ids_path.back());
+  return path;
+}
+
+std::ostream &operator<< (std::ostream &stream, const WrapperState &state) {
+  stream << "(" << state.env_state_id << ", " << state.creation_time <<  ", " << state.prob << ")";
+  stream << "\n";
+  for (auto it = state.lazy_edges.begin(); it != state.lazy_edges.end(); ++it) {
+    stream << *it << " ";
+  }
+  return stream;
 }
