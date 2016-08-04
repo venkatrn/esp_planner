@@ -336,9 +336,7 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
 
   LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
   lao_planner.SetStart(start_id);
-  vector<int> expected_path;
-  vector<int> best_action_ids;
-  lao_planner.Plan(&expected_path, &best_action_ids);
+  lao_planner.Plan(LAOPlannerParams::ParamsForOptimalPolicy());
 
   const auto &policy_map = lao_planner.GetPolicyMap();
   printf("Policy for Edge Evaluation\n");

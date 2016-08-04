@@ -19,7 +19,7 @@ const string kDefaultDebugDir =
 void test_planner() {
 
   // (from, to, cost, probability of existence, evaluation time)
-  // 
+  //
   // 3 lazy paths to goal.
   // StochasticGraph g(6);
   // vector<vector<double>> edges = {
@@ -91,7 +91,7 @@ void test_planner() {
   auto edge_bundle_map = get(bo::edge_bundle, g);
 
   for (const auto &edge : edges) {
-    auto& edge_properties = edge_bundle_map[add_edge(edge[0], edge[1], g).first];
+    auto &edge_properties = edge_bundle_map[add_edge(edge[0], edge[1], g).first];
     edge_properties.cost = static_cast<int>(edge[2]);
     edge_properties.probability = edge[3];
     edge_properties.evaluation_time = edge[4];
@@ -102,8 +102,8 @@ void test_planner() {
   }
 
   EnvBGStochastic bg_env(g);
-  unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, true)); 
-  // unique_ptr<SBPLPlanner> planner(new LazyARAPlanner(&bg_env, true)); 
+  unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, true));
+  // unique_ptr<SBPLPlanner> planner(new LazyARAPlanner(&bg_env, true));
   planner->set_start(0);
   planner->set_goal(goal_id);
   ReplanParams params(1.0);
@@ -115,14 +115,18 @@ void test_planner() {
   int solution_cost = 0;
   planner->replan(&solution_paths, params, &solution_cost);
   printf("Found %d possible paths:\n", static_cast<int>(solution_paths.size()));
+
   for (size_t ii = 0; ii < solution_paths.size(); ++ii) {
     const auto &solution_path = solution_paths[ii];
     cout << "Cost: " << solution_path.cost << "     ";
+
     for (size_t jj = 0; jj < solution_path.state_ids.size(); ++jj) {
-      cout << solution_path.state_ids[jj] << " "; 
+      cout << solution_path.state_ids[jj] << " ";
     }
+
     cout << endl;
   }
+
   cout << endl;
   int true_path_idx = planner->GetTruePathIdx(solution_paths);
 }
@@ -234,9 +238,7 @@ int main(int argc, char **argv) {
   // Exercise planner.
   LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
   lao_planner.SetStart(start_id);
-  vector<int> expected_path;
-  vector<int> best_action_ids;
-  lao_planner.Plan(&expected_path, &best_action_ids);
+  lao_planner.Plan(LAOPlannerParams::ParamsForOptimalPolicy());
 
   const auto &policy_map = lao_planner.GetPolicyMap();
   printf("Policy for Edge Evaluation\n");
@@ -248,6 +250,10 @@ int main(int argc, char **argv) {
   }
 
   printf("Most likely path from executing optimal policy:\n");
+
+  vector<int> expected_path;
+  vector<int> action_ids;
+  lao_planner.ReconstructMostLikelyPath(&expected_path, &action_ids);
 
   for (size_t ii = 0; ii < expected_path.size(); ++ii) {
     auto ssp_state = ssp->state_hasher_.GetState(expected_path[ii]);

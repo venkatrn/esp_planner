@@ -15,12 +15,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
-#include <ctime>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <stack>
 #include <unordered_map>
 #include <vector>
+
+using high_res_clock = std::chrono::high_resolution_clock;
 
 namespace {
 constexpr int kMaxPlannerExpansions = 100000;
@@ -79,23 +81,101 @@ struct PlannerStats {
   PlannerStats(const PlannerStats &other) = default;
 };
 
+// The LAO planner will terminate if planning time exceeds max_plan_time or
+// number of expansions (calls to GetSuccs) exceeds max_expansions or when the
+// Bellman residual drops below max_allowed_bellman_residual. In the last case,
+// the returned policy (which can be obtained by GetPolicyMap) is guaranteed to
+// be a proper policy and an optimal one, while in the first two, there is no
+// guarantee that the policy is a proper one (i.e, you might end up in a state
+// for which no action has been computed). The first two are appropriate in an
+// online setting, where you can plan for some time, execute the best action
+// for current state, update current state, replan, iterate until you arrive at
+// a terminal state.
+struct LAOPlannerParams {
+  double max_plan_time = 10.0; // seconds
+  int max_expansions = 100000;
+  double max_allowed_bellman_residual = 1e-3;
+  // If true, this will throw away our existing solution graph and start over.
+  // Otherwise, planning will use the existing solution graph. Use the latter
+  // option when running the planner in an online setting.
+  bool plan_from_scratch = true;
+
+  // Provide some commonly used parameter settings.
+  static LAOPlannerParams Default() {
+    return LAOPlannerParams();
+  }
+  static LAOPlannerParams ParamsForOptimalPolicy() {
+    LAOPlannerParams params;
+    params.max_plan_time = std::numeric_limits<double>::max();
+    params.max_expansions = std::numeric_limits<int>::max();
+    params.max_allowed_bellman_residual = 1e-10;
+    params.plan_from_scratch = true;
+    return params;
+  }
+  static LAOPlannerParams ParamsForOnlinePolicy(double episode_time) {
+    LAOPlannerParams params;
+    params.max_plan_time = episode_time;
+    params.max_expansions = std::numeric_limits<int>::max();
+    params.max_allowed_bellman_residual = 1e-10;
+    params.plan_from_scratch = false;
+    return params;
+  }
+};
+
+// The LAOPlanner is an MDP solver that finds an optimal policy given a start
+// state. This is templated on an AbstractMDP class which must implement these
+// two methods:
+
+// void GetSuccs(int source_state_id,
+//               vector<vector<int>* succ_ids,
+//               vector<vector<double>* succ_probabilities,
+//               vector<vector<double>>* action_costs_map);
+//
+// If "k" actions are applicable at the source_state s, then
+// succ_ids.size() = succ_probabilities.size() = action_costs_map.size() = k.
+// If 'm' there are possible successor states for applying action a (0 <= a <
+// k), then succ_ids[a].size() = succ_probabilities[a].size() =
+// action_costs_map[a].size() = m.  These terms represent the resulting
+// successor state ID, transition probability and corresponding cost (note that
+// the cost is defined as a function of <source state, action, resulting
+// state> to keep it as general as possible).
+//
+// bool IsGoalState(int state_id);
+//
+//
+// This should return true if the state corresponding to state_id is a
+// terminal/absorbing state.
+//
+// double GetGoalHeuristic(int state_id);
+//
+// This should return a non-overestimating cost-to-go value for the state
+// corresponding to state_id, under the optimal policy. This could be something
+// like Euclidean distance in a stochastic shortest path problem (SSP) on grids. If
+// unsure, simply return 0.
 template<class AbstractMDP>
 class LAOPlanner {
  public:
   LAOPlanner(std::shared_ptr<AbstractMDP> abstract_mdp);
   ~LAOPlanner();
   void SetStart(int start_state_id);
-  bool Plan(std::vector<int> *state_ids, std::vector<int> *action_ids = nullptr);
+  bool Plan(const LAOPlannerParams &planner_params);
   PlannerStats GetPlannerStats();
   const std::unordered_map<int, int> &GetPolicyMap() {
     return optimal_policy_map_;
   }
+  /**@brief Reconstruct optimistic path (actions lead to successor with smallest V-value)**/
+  void ReconstructOptimisticPath(std::vector<int> *state_ids,
+                                 std::vector<int> *action_ids);
+  /**@brief Reconstruct most likely path (actions lead to successor with highest transition probability)**/
+  void ReconstructMostLikelyPath(std::vector<int> *state_ids,
+                                 std::vector<int> *action_ids);
 
  private:
   std::shared_ptr<AbstractMDP> abstract_mdp_;
   int start_state_id_;
   PlannerStats planner_stats_;
   sbpl_utils::HashManager<PlannerState> state_hasher_;
+  LAOPlannerParams planner_params_;
 
   // policy_map_ is the map for all states (some of which may not be reachable
   // from start), and optimal_policy_map_ is the final solution graph.
@@ -105,12 +185,6 @@ class LAOPlanner {
 
   /**@brief Return a postorder DFS traversal (state ids) of the best solution graph**/
   void DFSTraversal(std::vector<int> *traversal);
-  /**@brief Reconstruct optimistic path (actions lead to successor with smallest V-value)**/
-  void ReconstructOptimisticPath(std::vector<int> *state_ids,
-                                 std::vector<int> *action_ids);
-  /**@brief Reconstruct most likely path (actions lead to successor with highest transition probability)**/
-  void ReconstructMostLikelyPath(std::vector<int> *state_ids,
-                                 std::vector<int> *action_ids);
   /**@brief Do value iteration on the best solution graph. Not used currently.**/
   void SolutionValueIteration();
 };
@@ -304,10 +378,12 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(
 }
 
 template <class AbstractMDP>
-bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids,
-                                   std::vector<int> *action_ids) {
-  // Plan from scratch (assume goal changed)
-  state_hasher_.Reset();
+bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
+  planner_params_ = params;
+
+  if (planner_params_.plan_from_scratch) {
+    state_hasher_.Reset();
+  }
 
   if (!abstract_mdp_) {
     printf("[LAO Planner]: Environment is not defined\n");
@@ -321,19 +397,27 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids,
   bool exists_non_terminal_states = true;
   planner_stats_.expansions = 0;
   planner_stats_.num_backups = 0;
-  clock_t begin_time = clock();
+  high_res_clock::time_point begin_time = high_res_clock::now();
 
   double total_residual = std::numeric_limits<double>::max();
 
   while (exists_non_terminal_states ||
-         total_residual > kMaxResidualForTermination) {
+         total_residual > planner_params_.max_allowed_bellman_residual) {
     // Reset residual to 0 for this iteration.
     total_residual = 0;
 
-    if (planner_stats_.expansions > kMaxPlannerExpansions) {
-      printf("[LAO Planner]: Exceeded max expansion. Returning optimistic path anyway.\n");
+    if (planner_stats_.expansions > planner_params_.max_expansions) {
+      printf("[LAO Planner]: Exceeded max expansion. Use current policy at your own risk.\n");
       break;
-      //return false;
+    }
+
+    auto current_time = high_res_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::duration<double>>
+                        (current_time - begin_time);
+
+    if (elapsed_time.count() > planner_params_.max_plan_time) {
+      printf("[LAO Planner]: Exceeded max plan time. Use current policy at your own risk.\n");
+      break;
     }
 
     // Get the DFS traversal of the best partial solution graph
@@ -451,8 +535,10 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids,
     }
   }
 
-  clock_t end_time = clock();
-  planner_stats_.time = double(end_time - begin_time) / CLOCKS_PER_SEC;
+  auto end_time = high_res_clock::now();
+  planner_stats_.time =
+    std::chrono::duration_cast<std::chrono::duration<double>>
+    (end_time - begin_time).count();
   planner_stats_.cost = state_hasher_.GetState(start_state_id_).v;
 
   // Reconstruct path
@@ -473,9 +559,8 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids,
   }
 
   // SolutionValueIteration();
-
   // ReconstructOptimisticPath(state_ids, action_ids);
-  ReconstructMostLikelyPath(state_ids, action_ids);
+  // ReconstructMostLikelyPath(state_ids, action_ids);
   // PrintPlannerStateMap();
   return true;
 }
