@@ -13,6 +13,7 @@
 #include <limits>
 
 #include <cassert>
+#include <iostream>
 #include <fstream>
 
 using namespace std;
@@ -66,11 +67,13 @@ vector<int> SSPState::GetUnevaluatedEdges() const {
   vector<int> unevaluated_edges;
   unevaluated_edges.reserve(size());
   const BitVector evaluated_edges = valid_bits | invalid_bits;
+
   for (size_t ii = 0; ii < size(); ++ii) {
-     if (!evaluated_edges.test(ii)) {
-       unevaluated_edges.push_back(static_cast<int>(ii));
-     }
+    if (!evaluated_edges.test(ii)) {
+      unevaluated_edges.push_back(static_cast<int>(ii));
+    }
   }
+
   return unevaluated_edges;
 }
 
@@ -222,8 +225,22 @@ void EdgeSelectorSSP::ComputeBounds(const EdgeStatusMap &edge_status_map,
 void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
                                     int *lower_bound,
                                     int *upper_bound) const {
+  int lower_bound_idx = -1;
+  int upper_bound_idx = -1;
+  ComputeBounds(ssp_state, lower_bound, upper_bound, &lower_bound_idx,
+                &upper_bound_idx);
+}
+
+void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
+                                    int *lower_bound,
+                                    int *upper_bound,
+                                    int *lower_bound_idx,
+                                    int *upper_bound_idx) const {
   *lower_bound = std::numeric_limits<int>::max();
   *upper_bound = std::numeric_limits<int>::max();
+
+  *lower_bound_idx = -1;
+  *upper_bound_idx = -1;
 
   for (size_t ii = 0; ii < path_bit_vectors_.size(); ++ii) {
     const auto &path_bit_vector = path_bit_vectors_[ii];
@@ -231,11 +248,17 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
     const int path_status = PathStatus(path_bit_vector, ssp_state);
 
     if (path_status == 0 || path_status == 1) {
-      *lower_bound = std::min(*lower_bound, cost);
+      if (cost < *lower_bound) {
+        *lower_bound = cost;
+        *lower_bound_idx = static_cast<int>(ii);
+      }
     }
 
     if (path_status == 1) {
-      *upper_bound = std::min(*upper_bound, cost);
+      if (cost < *upper_bound) {
+        *upper_bound = cost;
+        *upper_bound_idx = static_cast<int>(ii);
+      }
     }
   }
 
@@ -274,12 +297,34 @@ double EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {
   auto &ssp_state = state_hasher_.GetState(state_id);
   const vector<int> unevaluated_edges = ssp_state.GetUnevaluatedEdges();
   double min_eval_time = std::numeric_limits<double>::max();
+
   for (int edge_id : unevaluated_edges) {
     const Edge &edge = edge_hasher_.GetState(edge_id);
     min_eval_time = std::min(min_eval_time, edge.evaluation_time);
   }
+
   // TODO: implement more informed heuristic.
   return 0.5 * min_eval_time * ssp_state.suboptimality_bound;
+}
+
+Edge EdgeSelectorSSP::EdgeIDToEdge(int edge_id) const {
+  return edge_hasher_.GetState(edge_id);
+}
+
+SSPState EdgeSelectorSSP::SSPStateIDToSSPState(int ssp_state_id) const {
+  return state_hasher_.GetState(ssp_state_id);
+}
+
+int EdgeSelectorSSP::GetBestValidPathIdx(const SSPState &ssp_state) const {
+  int lower_bound = -1;
+  int lower_bound_idx = -1;
+  int upper_bound = -1;
+  int upper_bound_idx = -1;
+  ComputeBounds(ssp_state, &lower_bound, &upper_bound, &lower_bound_idx,
+                &upper_bound_idx);
+  // The path corresponding to the upper bound is the valid executable path
+  // (i.e, all the edges on this path have been evaluated as valid).
+  return upper_bound_idx;
 }
 
 void EdgeSelectorSSP::GetSuccs(int state_id,
@@ -339,6 +384,9 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
     succ_state_ids_map->push_back(succ_states);
     succ_state_probabilities_map->push_back(succ_probabilities);
     action_costs_map->push_back(succ_costs);
+    // cout << "Succs for " << parent_state.to_string() << endl
+    //  << succ_optimistic.to_string() << endl
+    //  << succ_pessimistic.to_string() << endl;
   }
 }
 
@@ -372,6 +420,7 @@ void EdgeSelectorSSP::PrintPathsAsDOTGraph(const string &filename) const {
 
       dot_file << parent_string << " -> " << succ_string
                << "[label=\"" << " "  << "\"";
+
       if (parent_string.compare("S") != 0) {
         dot_file << ", style=\"dashed\"";
       } else {

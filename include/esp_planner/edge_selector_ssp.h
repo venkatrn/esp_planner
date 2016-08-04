@@ -3,8 +3,8 @@
  * @file edge_selector_ssp.h
  * @author Venkatraman Narayanan
  * @brief An Stochastic Shortest Path (SSP) formulation for determining what edges to evaluate next, given
- * a set of paths (containing unevaluated, stochastic edges that are expensive to evaluate) between a start 
- * and goal state. We compute the optimal policy that maps from (current evaluation status of all stochastic edges) 
+ * a set of paths (containing unevaluated, stochastic edges that are expensive to evaluate) between a start
+ * and goal state. We compute the optimal policy that maps from (current evaluation status of all stochastic edges)
  * to the next edge that needs to be evaluated.
  * Carnegie Mellon University, 2016
  */
@@ -58,7 +58,7 @@ struct SSPState {
   double suboptimality_bound = 0;
   SSPState() = delete;
   explicit SSPState(int num_edges);
-  SSPState(const SSPState& other);
+  SSPState(const SSPState &other);
   bool operator==(const SSPState &other) const;
   bool operator!=(const SSPState &other) const;
   size_t GetHash() const;
@@ -67,7 +67,7 @@ struct SSPState {
   std::vector<int> GetUnevaluatedEdges() const;
 };
 
-class EdgeSelectorSSP { 
+class EdgeSelectorSSP {
  public:
   EdgeSelectorSSP();
   // The provided set of paths is preprocessed to remove non-stochastic edges
@@ -85,8 +85,11 @@ class EdgeSelectorSSP {
     return static_cast<int>(edge_hasher_.Size());
   }
   void PrintPathsAsDOTGraph(const std::string &filename) const;
+  Edge EdgeIDToEdge(int edge_id) const;
+  SSPState SSPStateIDToSSPState(int ssp_state_id) const;
+  int GetBestValidPathIdx(const SSPState &ssp_state) const;
 
-//  private:
+  //  private:
   std::vector<Path> paths_;
   std::vector<SimplifiedPath> simplified_paths_;
   std::vector<BitVector> path_bit_vectors_;
@@ -110,10 +113,13 @@ class EdgeSelectorSSP {
                      int *upper_bound) const;
   void ComputeBounds(const SSPState &ssp_state, int *lower_bound,
                      int *upper_bound) const;
+  void ComputeBounds(const SSPState &ssp_state, int *lower_bound,
+                     int *upper_bound, int *lower_bound_idx, int *upper_bound_idx) const;
   int GetSuboptimalityBound(const SSPState &ssp_state) const;
   double ComputeTransitionCost(const SSPState &parent_state,
-                            const SSPState &child_state, int edge_id) const;
+                               const SSPState &child_state, int edge_id) const;
 };
 } // namspace sbpl
 
-std::ostream &operator<< (std::ostream &stream, const sbpl::SSPState &ssp_state);
+std::ostream &operator<< (std::ostream &stream,
+                          const sbpl::SSPState &ssp_state);

@@ -27,6 +27,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <esp_planner/esp_planner.h>
+#include <esp_planner/edge_selector_ssp.h>
+#include <esp_planner/lao_planner.h>
+
 using namespace std;
 
 ESPPlanner::ESPPlanner(EnvironmentESP *environment,
@@ -321,6 +324,71 @@ vector<int> ESPPlanner::GetSearchPath(int state_id, int &solcost) {
   return wholePathIds;
 }
 
+int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
+  using namespace sbpl;
+  std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
+  ssp->SetPaths(paths);
+
+  const int num_edges = ssp->NumStochasticEdges();
+  SSPState start_state(num_edges);
+  start_state.suboptimality_bound = ssp->GetSuboptimalityBound(start_state);
+  const int start_id = ssp->state_hasher_.GetStateIDForceful(start_state);
+
+  LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
+  lao_planner.SetStart(start_id);
+  vector<int> expected_path;
+  vector<int> best_action_ids;
+  lao_planner.Plan(&expected_path, &best_action_ids);
+
+  const auto &policy_map = lao_planner.GetPolicyMap();
+  printf("Policy for Edge Evaluation\n");
+
+  for (const auto &element : policy_map) {
+    const int state_id = element.first;
+    const SSPState state = ssp->state_hasher_.GetState(state_id);
+    cout << state << endl << "Action: " << element.second << endl << endl;
+  }
+
+  // Actually run the policy.
+  SSPState current_state = start_state;
+  const double kBoundForTermination = 1e-3;
+  int best_valid_path_idx = -1;
+
+  while (ssp->GetSuboptimalityBound(current_state) > kBoundForTermination) {
+    // Best action to execute.
+    const int current_state_id = ssp->state_hasher_.GetStateID(current_state);
+
+
+    auto it = policy_map.find(current_state_id);
+
+    if (it == policy_map.end()) {
+      cout << "ERROR: We do not have a policy for state " << current_state_id << endl
+           <<
+           current_state << endl;
+      return -1;
+    }
+
+    const int edge_id = it->second;
+    const Edge &edge_to_evaluate = ssp->EdgeIDToEdge(edge_id);
+    printf("Evaluating edge %d:  (%d  %d) \n", edge_id, edge_to_evaluate.first,
+           edge_to_evaluate.second);
+    bool valid = environment_wrapper_->EvaluateOriginalEdge(edge_to_evaluate.first,
+                                                            edge_to_evaluate.second);
+
+    if (valid) {
+      current_state.valid_bits.set(edge_id, true);
+    } else {
+      current_state.invalid_bits.set(edge_id, true);
+    }
+
+    best_valid_path_idx = ssp->GetBestValidPathIdx(current_state);
+    printf("Current best path idx is %d\n", best_valid_path_idx);
+    cout << "Current state " << current_state.to_string() << endl;
+  }
+
+  return best_valid_path_idx;
+}
+
 bool ESPPlanner::outOfTime() {
   //if the user has sent an interrupt signal we stop
   if (interruptFlag) {
@@ -592,7 +660,7 @@ int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
 
   printf("There are %d paths to the goal\n",
          static_cast<int>(solution_paths->size()));
-  environment_wrapper_->wrapper_state_hasher_.Print();
+  // environment_wrapper_->wrapper_state_hasher_.Print();
 
   start_state_id = -1;
   goal_state_id = -1;

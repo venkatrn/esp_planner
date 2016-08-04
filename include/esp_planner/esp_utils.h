@@ -32,13 +32,13 @@ class EnvBGStochastic final : public EnvironmentESP,
     GetSuccs(parent_id, succ_ids, costs, &edge_probabilities, &edge_eval_times);
   }
 
-  int GetTrueCost(int parent_id, int child_id) override;
+  bool EvaluateEdge(int parent_id, int child_id) override;
   int GetGoalHeuristic(int state_id) override;
 
   // Unused methods. These need to be here again, to avoid the ambiguity in
   // overrides.
-  virtual bool InitializeEnv(const char *) override {};
-  virtual bool InitializeMDPCfg(MDPConfig *) override {};
+  virtual bool InitializeEnv(const char *) override {return true;}
+  virtual bool InitializeMDPCfg(MDPConfig *) override {return true;}
   virtual int GetFromToHeuristic(int, int) override {
     return 0;
   }

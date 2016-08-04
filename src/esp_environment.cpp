@@ -11,6 +11,10 @@ EnvWrapper::EnvWrapper(EnvironmentESP *env_esp) {
   environment_esp_ = env_esp;
 }
 
+bool EnvWrapper::EvaluateOriginalEdge(int parent_id, int child_id) {
+  return environment_esp_->EvaluateEdge(parent_id, child_id);
+}
+
 void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                           std::vector<int> *costs, std::vector<double> *edge_probabilities,
                           std::vector<double> *edge_eval_times, std::vector<int> *edge_groups) {

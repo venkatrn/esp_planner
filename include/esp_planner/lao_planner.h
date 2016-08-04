@@ -23,12 +23,12 @@
 #include <vector>
 
 namespace {
-  constexpr int kMaxPlannerExpansions = 100000;
-  // Tolerance for comparing double numbers.
-  constexpr double kDblTolerance = 1e-4;
-  // LAO* will terminate when total residual of the best solution graph is less
-  // than this value (and when no non-terminal states exist).
-  constexpr double kMaxResidualForTermination = 1e-3;
+constexpr int kMaxPlannerExpansions = 100000;
+// Tolerance for comparing double numbers.
+constexpr double kDblTolerance = 1e-4;
+// LAO* will terminate when total residual of the best solution graph is less
+// than this value (and when no non-terminal states exist).
+constexpr double kMaxResidualForTermination = 1e-3;
 } // namespace
 
 namespace sbpl {
@@ -45,10 +45,11 @@ struct PlannerState {
   std::vector<std::vector<double>> action_costs_map;
   int parent_state_id = -1;
   int best_action_id = -1;
-  int best_vec_idx = -1; //Cached for convenience -- action_ids[best_vec_idx] = best_action_id
+  int best_vec_idx =
+    -1; //Cached for convenience -- action_ids[best_vec_idx] = best_action_id
 
   PlannerState() = default;
-  PlannerState(const PlannerState& other) = default;
+  PlannerState(const PlannerState &other) = default;
 
   PlannerState(int s_id, double v_val, int parent_s_id) {
     state_id = s_id;
@@ -75,7 +76,7 @@ struct PlannerStats {
   int cost = -1;
   int num_backups = -1;
   PlannerStats() = default;
-  PlannerStats(const PlannerStats& other) = default;
+  PlannerStats(const PlannerStats &other) = default;
 };
 
 template<class AbstractMDP>
@@ -89,7 +90,7 @@ class LAOPlanner {
   const std::unordered_map<int, int> &GetPolicyMap() {
     return optimal_policy_map_;
   }
-  
+
  private:
   std::shared_ptr<AbstractMDP> abstract_mdp_;
   int start_state_id_;
@@ -99,8 +100,8 @@ class LAOPlanner {
   // policy_map_ is the map for all states (some of which may not be reachable
   // from start), and optimal_policy_map_ is the final solution graph.
   // Mapping from state ID to action ID.
-  std::unordered_map<int, int> policy_map_; 
-  std::unordered_map<int, int> optimal_policy_map_; 
+  std::unordered_map<int, int> policy_map_;
+  std::unordered_map<int, int> optimal_policy_map_;
 
   /**@brief Return a postorder DFS traversal (state ids) of the best solution graph**/
   void DFSTraversal(std::vector<int> *traversal);
@@ -120,7 +121,8 @@ class LAOPlanner {
 
 
 template <class AbstractMDP>
-LAOPlanner<AbstractMDP>::LAOPlanner(std::shared_ptr<AbstractMDP> abstract_mdp) {
+LAOPlanner<AbstractMDP>::LAOPlanner(std::shared_ptr<AbstractMDP>
+                                    abstract_mdp) {
   start_state_id_ = -1;
   abstract_mdp_ = abstract_mdp;
 }
@@ -190,8 +192,9 @@ void LAOPlanner<AbstractMDP>::DFSTraversal(std::vector<int> *traversal) {
 // The planner will return all waypoints, and force prims for each waypoint except the last one.
 // So state_ids.size() = action_ids.size() + 1
 template <class AbstractMDP>
-void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_ids,
-                                           std::vector<int> *action_ids) {
+void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(
+  std::vector<int> *state_ids,
+  std::vector<int> *action_ids) {
   printf("[LAO Planner]: Reconstructing optimistic path\n");
   assert(state_ids != nullptr);
   assert(action_ids != nullptr);
@@ -208,7 +211,8 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_
          !abstract_mdp_->IsGoalState(current_state.state_id)) {
     //printf("State: %d, Val: %f", current_state.state_id, current_state.v);
     int best_vec_idx = current_state.best_vec_idx;
-    std::vector<int> succ_state_ids = current_state.succ_state_ids_map[best_vec_idx];
+    std::vector<int> succ_state_ids =
+      current_state.succ_state_ids_map[best_vec_idx];
     double min_val = std::numeric_limits<double>::max();
     int optimistic_succ_id = -1;
 
@@ -244,8 +248,9 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(std::vector<int> *state_
 }
 
 template <class AbstractMDP>
-void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_ids,
-                                           std::vector<int> *action_ids) {
+void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(
+  std::vector<int> *state_ids,
+  std::vector<int> *action_ids) {
   printf("[LAO Planner]: Reconstructing most likely path\n");
   assert(state_ids != nullptr);
   assert(action_ids != nullptr);
@@ -262,13 +267,15 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
          !abstract_mdp_->IsGoalState(current_state.state_id)) {
     //printf("State: %d, Val: %f", current_state.state_id, current_state.v);
     int best_vec_idx = current_state.best_vec_idx;
-    std::vector<int> succ_state_ids = current_state.succ_state_ids_map[best_vec_idx];
+    std::vector<int> succ_state_ids =
+      current_state.succ_state_ids_map[best_vec_idx];
     double max_prob = 0;
     int most_likely_succ_id = -1;
 
     const auto &probs = current_state.succ_state_probabilities_map[best_vec_idx];
+
     for (size_t ii = 0; ii < probs.size(); ++ii) {
-      if(probs[ii] > max_prob) {
+      if (probs[ii] > max_prob) {
         max_prob = probs[ii];
         most_likely_succ_id = current_state.succ_state_ids_map[best_vec_idx][ii];
       }
@@ -297,7 +304,8 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(std::vector<int> *state_
 }
 
 template <class AbstractMDP>
-bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int> *action_ids) {
+bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids,
+                                   std::vector<int> *action_ids) {
   // Plan from scratch (assume goal changed)
   state_hasher_.Reset();
 
@@ -316,9 +324,12 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
   clock_t begin_time = clock();
 
   double total_residual = std::numeric_limits<double>::max();
-  while (exists_non_terminal_states || total_residual > kMaxResidualForTermination) {
+
+  while (exists_non_terminal_states ||
+         total_residual > kMaxResidualForTermination) {
     // Reset residual to 0 for this iteration.
     total_residual = 0;
+
     if (planner_stats_.expansions > kMaxPlannerExpansions) {
       printf("[LAO Planner]: Exceeded max expansion. Returning optimistic path anyway.\n");
       break;
@@ -371,21 +382,20 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
         s.succ_state_probabilities_map = succ_state_probabilities_map;
         s.expanded = true;
 
-        /*
-           printf("Succs:");
-           for (int ii = 0; ii < succ_state_ids_map.size(); ++ii)
-           {
-           printf("Edge: %d: %f", action_ids[ii], action_costs[ii]);
-           for (int jj = 0; jj < succ_state_ids_map[ii].size(); ++jj)
-           {
-           printf("State: %d: %f", succ_state_ids_map[ii][jj], succ_state_probabilities_map[ii][jj]);
-           }
-           }
-           */
+        // printf("Succs:");
+        // for (int ii = 0; ii < succ_state_ids_map.size(); ++ii)
+        // {
+        // printf("Edge: %d", action_ids[ii]);
+        // for (int jj = 0; jj < succ_state_ids_map[ii].size(); ++jj)
+        // {
+        // printf("State: %d: %f %f", succ_state_ids_map[ii][jj], succ_state_probabilities_map[ii][jj], action_costs_map[ii][jj]);
+        // }
+        // }
 
         for (size_t ii = 0; ii < action_ids.size(); ++ii) {
           for (size_t jj = 0; jj < succ_state_ids_map[ii].size(); ++jj) {
             const int succ_id = succ_state_ids_map[ii][jj];
+
             // Skip successors that have already been generated
             if (state_hasher_.Exists(succ_id)) {
               continue;
@@ -422,7 +432,7 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
         }
       }
 
-      
+
       ++planner_stats_.num_backups;
 
       // Add residual(s) to the total residual.
@@ -453,12 +463,15 @@ bool LAOPlanner<AbstractMDP>::Plan(std::vector<int> *state_ids, std::vector<int>
   std::vector<int> dfs_traversal;
   DFSTraversal(&dfs_traversal);
   printf("[LAO Planner]: Finished econstructing optimal policy\n");
+
   for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
     PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);
+
     if (s.best_action_id != -1) {
       optimal_policy_map_[s.state_id] = s.best_action_id;
     }
   }
+
   // SolutionValueIteration();
 
   // ReconstructOptimisticPath(state_ids, action_ids);
@@ -526,7 +539,7 @@ void LAOPlanner<AbstractMDP>::SolutionValueIteration() {
 
   if (iter == max_iter) {
     printf("[LAO Planner]: Value iteration exceeded max_iter limit. Error in V-values is %f\n",
-             error);
+           error);
   }
 }
 

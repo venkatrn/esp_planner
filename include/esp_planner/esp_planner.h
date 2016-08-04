@@ -104,6 +104,9 @@ class ESPPlanner : public SBPLPlanner {
 
   virtual void get_search_stats(std::vector<PlannerStats> *s);
 
+  // Planner for computing optimal edge evaluation policy.
+  virtual int GetTruePathIdx(const std::vector<sbpl::Path> &paths);
+
  protected:
   //data structures (open and incons lists)
   CHeap heap;

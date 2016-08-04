@@ -20,7 +20,7 @@ class EnvironmentESP : public virtual DiscreteSpaceInformation {
                         std::vector<double> *edge_eval_times,
                         std::vector<int> *edge_groups = nullptr) = 0;
   virtual int GetGoalHeuristic(int state_id) override = 0;
-  virtual int GetTrueCost(int parent_id, int child_id) override = 0;
+  virtual bool EvaluateEdge(int parent_id, int child_id) = 0;
   virtual void GetPreds(int parent_id, std::vector<int> *succ_ids,
                         std::vector<int> *costs, std::vector<double> *edge_probabilites,
                         std::vector<double> *edge_eval_times,
@@ -29,8 +29,8 @@ class EnvironmentESP : public virtual DiscreteSpaceInformation {
   }
 
   // Unused methods.
-  virtual bool InitializeEnv(const char *) override {};
-  virtual bool InitializeMDPCfg(MDPConfig *) override {};
+  virtual bool InitializeEnv(const char *) override {return true;};
+  virtual bool InitializeMDPCfg(MDPConfig *) override {return true;};
   virtual int GetFromToHeuristic(int, int) override {
     return 0;
   }
@@ -93,6 +93,7 @@ class EnvWrapper {
   void GetPreds(int parent_id, std::vector<int> *succ_ids,
                 std::vector<int> *costs, std::vector<double> *edge_probabilities,
                 std::vector<double> *edge_eval_times, std::vector<int> *edge_groups = nullptr);
+  virtual bool EvaluateOriginalEdge(int parent_id, int child_id);
   int GetGoalHeuristic(int state_id);
   int GetStartHeuristic(int state_id);
   void EnsureHeuristicsUpdated(bool forward_search);

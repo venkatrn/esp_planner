@@ -109,8 +109,8 @@ void EnvBGStochastic::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   }
 }
 
-int EnvBGStochastic::GetTrueCost(int parent_id, int child_id) {
-  return 0;
+bool EnvBGStochastic::EvaluateEdge(int parent_id, int child_id) {
+  return false;
 }
 
 int EnvBGStochastic::GetGoalHeuristic(int state_id) {
