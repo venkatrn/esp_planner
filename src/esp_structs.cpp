@@ -2,6 +2,10 @@
 
 #include <boost/functional/hash.hpp>
 
+namespace {
+  const bool kBidirectionalEdges = true;
+}
+
 namespace sbpl {
 Edge::Edge(int first, int second,
            double probability, double evaluation_time) :
@@ -24,16 +28,29 @@ Edge::Edge(int first, int second, double probability) : Edge(first, second,
 Edge::Edge(int first, int second) : Edge(first, second, 0.0, 0.0) {
 }
 bool Edge::operator==(const Edge &other) const {
-  return (first == other.first) && (second == other.second);
+  bool edges_equal = (first == other.first) && (second == other.second);
+  if (edges_equal) {
+    return true;
+  }
+  if (kBidirectionalEdges) {
+    edges_equal = edges_equal || ((first == other.second) && (second == other.first));
+  }
+  return edges_equal;
 }
 bool Edge::operator!=(const Edge &other) const {
   return !(*this == other);
 }
 size_t Edge::GetHash() const {
-  size_t hash_value = std::hash<int>()(first);
-  // boost::hash_combine is not associative, which is what we need for directed
-  // edges.
-  boost::hash_combine(hash_value, std::hash<int>()(second));
+  size_t hash_value = 0;
+  if (kBidirectionalEdges) {
+    // Commutative hash.
+    hash_value = std::hash<int>()(first) ^ std::hash<int>()(second);
+  } else {
+    hash_value = std::hash<int>()(first);
+    // boost::hash_combine is not associative, which is what we need for directed
+    // edges.
+    boost::hash_combine(hash_value, std::hash<int>()(second));
+  }
   return hash_value;
 }
 

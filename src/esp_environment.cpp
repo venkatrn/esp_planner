@@ -44,20 +44,23 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
               edge_eval_times->at(ii));
     const int edge_id = edge_hasher_.GetStateIDForceful(edge);
     // We have a stochastic edge.
+    double wrapper_state_log_prob = parent_wrapper.log_prob;
+
     if (edge_probabilities->at(ii) < 1.0 - kDblTolerance) {
       // TODO: check self-consistency.
       // TODO: use edge_group info here if available.
       succ_lazy_edges.insert(edge_id);
+      wrapper_state_log_prob += log(edge_probabilities->at(ii));
     } else {
       edge_probabilities->at(ii) = 1.0;
     }
 
-    const double wrapper_state_prob = parent_wrapper.prob * edge_probabilities->at(ii);
     const int wrapper_succ_id = GetWrapperStateID(orig_succ_ids[ii],
-                                                  wrapper_state_prob,
+                                                  wrapper_state_log_prob,
                                                   succ_lazy_edges);
     succ_ids->at(ii) = wrapper_succ_id;
   }
+
   succs_cache_[parent_id] = *succ_ids;
   costs_cache_[parent_id] = *costs;
   probs_cache_[parent_id] = *edge_probabilities;
@@ -115,13 +118,12 @@ int EnvWrapper::WrapperToStateID(int wrapper_id) const {
 int EnvWrapper::GetWrapperStateID(int state_id, double prob,
                                   const std::set<int> &lazy_edges /*= empty set*/) {
   WrapperState wrapper(state_id, prob, lazy_edges);
-  wrapper.creation_time = static_cast<double>(wrapper_state_hasher_.Size());
   int wrapper_state_id = 0;
 
   if (wrapper_state_hasher_.Exists(wrapper)) {
     wrapper_state_id = wrapper_state_hasher_.GetStateID(wrapper);
+    wrapper_state_hasher_.UpdateState(wrapper);
   } else {
-    wrapper.creation_time = static_cast<double>(wrapper_state_hasher_.Size());
     wrapper_state_id = wrapper_state_hasher_.GetStateIDForceful(wrapper);
     wrapper_to_state_id_[wrapper_state_id] = state_id;
   }
@@ -129,18 +131,52 @@ int EnvWrapper::GetWrapperStateID(int state_id, double prob,
   return wrapper_state_id;
 }
 
-std::vector<int> EnvWrapper::GetAllGoalWrapperIDs(int goal_wrapper_id) {
-  int orig_state_id = WrapperToStateID(goal_wrapper_id);
+std::vector<int> EnvWrapper::GetAllGoalWrapperIDs(int goal_wrapper_id) const {
+  return AllEquivalentWrapperIDs(goal_wrapper_id);
+}
+
+std::vector<int> EnvWrapper::AllEquivalentWrapperIDs(int wrapper_state_id)
+const {
+  int orig_state_id = WrapperToStateID(wrapper_state_id);
   vector<int> state_wrapper_ids = StateToWrapperIDs(orig_state_id);
   return state_wrapper_ids;
 }
 
-sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>& wrapper_ids_path) {
+std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id) const {
+  int orig_state_id = WrapperToStateID(wrapper_state_id);
+  const auto &source_wrapper_state = wrapper_state_hasher_.GetState(
+                                       wrapper_state_id);
+  vector<int> state_wrapper_ids = StateToWrapperIDs(orig_state_id);
+  vector<int> subset_wrapper_ids;
+  subset_wrapper_ids.reserve(state_wrapper_ids.size());
+
+  for (size_t ii = 0; ii < state_wrapper_ids.size(); ++ii) {
+    if (state_wrapper_ids[ii] == wrapper_state_id) {
+      continue;
+    }
+
+    const auto &wrapper_state = wrapper_state_hasher_.GetState(
+                                  state_wrapper_ids[ii]);
+    const bool is_subset = std::includes(source_wrapper_state.lazy_edges.begin(),
+                                         source_wrapper_state.lazy_edges.end(), wrapper_state.lazy_edges.begin(),
+                                         wrapper_state.lazy_edges.end());
+
+    if (is_subset) {
+      subset_wrapper_ids.push_back(state_wrapper_ids[ii]);
+    }
+  }
+
+  return subset_wrapper_ids;
+}
+
+sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>
+                                                       &wrapper_ids_path) {
   sbpl::Path path;
   const size_t num_states = wrapper_ids_path.size();
   path.state_ids.resize(num_states);
   path.edge_probabilities.resize(num_states - 1);
   path.edge_eval_times.resize(num_states - 1);
+
   for (size_t ii = 0; ii < num_states - 1; ++ii) {
     int s1_id = WrapperToStateID(wrapper_ids_path[ii]);
     int s2_id = WrapperToStateID(wrapper_ids_path[ii + 1]);
@@ -150,16 +186,19 @@ sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>& w
     path.edge_probabilities[ii] = edge.probability;
     path.edge_eval_times[ii] = edge.evaluation_time;
   }
+
   // Add the final state to the path.
   path.state_ids[num_states - 1] = WrapperToStateID(wrapper_ids_path.back());
   return path;
 }
 
 std::ostream &operator<< (std::ostream &stream, const WrapperState &state) {
-  stream << "(" << state.env_state_id << ", " << state.creation_time <<  ", " << state.prob << ")";
+  stream << "(" << state.env_state_id << ", "  << exp(state.log_prob) << ")";
   stream << "\n";
+
   for (auto it = state.lazy_edges.begin(); it != state.lazy_edges.end(); ++it) {
     stream << *it << " ";
   }
+
   return stream;
 }

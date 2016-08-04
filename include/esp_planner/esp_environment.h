@@ -52,20 +52,17 @@ std::ostream &operator<< (std::ostream &stream, const WrapperState &state);
 
 class WrapperState {
  public:
-  explicit WrapperState(int state_id, double prob,
-                        const std::set<int> &lazy_edges) : env_state_id(state_id), prob(prob),
+  explicit WrapperState(int state_id, double log_prob,
+                        const std::set<int> &lazy_edges) : env_state_id(state_id), log_prob(log_prob),
     lazy_edges(lazy_edges) {}
+
   // NOTE: This is the environment state ID, not the ID of the wrapped state!
   int env_state_id = -1;
   // A collection of edges (or edge sets) that have been traversed by this
   // path.
   std::set<int> lazy_edges;
-  // The probability of this path.
-  // TODO: use log probability.
-  double prob = -1.0;
-
-  // Timestamp at which this state was created.
-  double creation_time = -1.0;
+  // The log probability of this path.
+  double log_prob = std::numeric_limits<double>::max();
 
   size_t GetHash() const {
     return env_state_id;
@@ -76,51 +73,8 @@ class WrapperState {
     if (env_state_id != other.env_state_id) {
       return false;
     }
-    // bool print = false;
-    // if (env_state_id == 5 && lazy_edges.empty()) {
-    //   std::cout << *this << std::endl;
-    //   std::cout << "Other\n";
-    //   std::cout << other << std::endl << std::endl;
-    //   print = true;
-    // }
-    // if (other.env_state_id == 5 && other.lazy_edges.empty()) {
-    //   std::cout << other << std::endl;
-    //   std::cout << "Other\n";
-    //   std::cout << *this << std::endl << std::endl;
-    //   print = true;
-    // }
-    
-    // We assume that duplicates of states get generated in order of increasing
-    // g-values, i.e, if s2 = (x, [abc]) is generated after s1 = (x,[ab]), then
-    // s1 and s2 are the same. Note that this handles the empty lazy_edges set
-    // (deterministic) case correctly as well.
-    // TODO: delegate the pruning part to GetSuccs and just check if two sets
-    // are equal here.
-    bool equal = true;
-    if (creation_time < other.creation_time) {
-      const bool subset = std::includes(other.lazy_edges.begin(), other.lazy_edges.end(), lazy_edges.begin(), lazy_edges.end());
-      if (subset && !other.lazy_edges.empty() && lazy_edges.empty() && prob < 0) {
-        equal = false;
-      } else {
-      equal = subset;
-      }
-    } else {
-      const bool subset = std::includes(lazy_edges.begin(), lazy_edges.end(), other.lazy_edges.begin(), other.lazy_edges.end());
-      if (subset && !lazy_edges.empty() && other.lazy_edges.empty() && other.prob < 0) {
-        equal = false;
-      } else {
-        equal = subset;
-      }
-    }
-    // if (print) {
-    //   std::cout << "EQUAL: " << equal << std::endl;
-    //   const bool subset = std::includes(other.lazy_edges.begin(), other.lazy_edges.end(), lazy_edges.begin(), lazy_edges.end());
-    //   std::cout << subset << std::endl;
-    //   std::cout << !other.lazy_edges.empty() << std::endl;
-    //   std::cout << lazy_edges.empty() << std::endl;
-    //   std::cout << (prob < 1e-3) << std::endl;
-    // }
-    return equal;
+
+    return lazy_edges == other.lazy_edges;
   }
   bool operator!=(const WrapperState &other) const {
     return !(*this == other);
@@ -142,13 +96,18 @@ class EnvWrapper {
   int GetGoalHeuristic(int state_id);
   int GetStartHeuristic(int state_id);
   void EnsureHeuristicsUpdated(bool forward_search);
-  std::vector<int> GetAllGoalWrapperIDs(int goal_wrapper_id);
-  sbpl::Path ConvertWrapperIDsPathToSBPLPath(const std::vector<int>& wrapper_ids_path);
+  std::vector<int> GetAllGoalWrapperIDs(int goal_wrapper_id) const;
+  sbpl::Path ConvertWrapperIDsPathToSBPLPath(const std::vector<int>
+                                             &wrapper_ids_path);
 
   // ID conversion utils.
   // The mapping from state IDs to wrapper IDs is one-to-many and injective (i.e, every wrapper ID corresponds to a unique state ID but not
   // vice versa).
   std::vector<int> StateToWrapperIDs(int env_state_id) const;
+  // Return all the wrapper IDs that all have the same underlying env_state_id as
+  // that of the state with wrapper_id.
+  std::vector<int> AllEquivalentWrapperIDs(int wrapper_state_id) const;
+  std::vector<int> AllSubsetWrapperIDs(int wrapper_state_id) const;
   int WrapperToStateID(int wrapper_id) const;
   // Returns ID of the newly created state, or the existing state.
   int GetWrapperStateID(int state_id, double prob,

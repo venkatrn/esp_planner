@@ -17,10 +17,11 @@ const string kDefaultDebugDir =
 }
 
 void test_planner() {
-  StochasticGraph g(6);
 
   // (from, to, cost, probability of existence, evaluation time)
+  // 
   // 3 lazy paths to goal.
+  // StochasticGraph g(6);
   // vector<vector<double>> edges = {
   //   {0, 1, 10, 0.1, 1.3},
   //   {1, 2, 10, 1.0, 1.5},
@@ -30,24 +31,53 @@ void test_planner() {
   //
   //   {0, 5, 20, 0.5, 1.0},
   //
-  //   {0, 3, 20, 1.0, 1.0},
-  //   {3, 5, 20, 1.0, 1.0}
+  //   {0, 3, 40, 1.0, 1.0},
+  //   {3, 5, 40, 1.0, 1.0}
   // };
+  // int goal_id = 5;
 
-  // 5 lazy paths to goal.
+  // 17 lazy paths to goal.
+  // StochasticGraph g(6);
+  // vector<vector<double>> edges = {
+  //   {0, 1, 1, 0.1, 1.3},
+  //   {1, 2, 1, 0.1, 1.5},
+  //   {2, 3, 1, 0.1, 1.5},
+  //   {3, 4, 1, 0.1, 3.5},
+  //   {4, 5, 1, 0.1, 0.1},
+  //
+  //   {0, 5, 100, 1.0, 1.0},
+  //
+  //   {1, 3, 1, 0.1, 1.0},
+  //   {1, 4, 1, 0.1, 1.0},
+  //   {1, 5, 1, 0.1, 1.0},
+  //   {2, 4, 1, 0.1, 1.0},
+  //   {2, 5, 1, 0.1, 1.0},
+  //   {3, 5, 1, 0.1, 1.0},
+  // };
+  // int goal_id = 5;
+
+  // 26 lazy paths to goal.
+  StochasticGraph g(7);
   vector<vector<double>> edges = {
-    {0, 1, 1, 0.1, 1.3},
-    {1, 2, 1, 1.0, 1.5},
-    {2, 3, 1, 1.0, 2.5},
-    {3, 4, 1, 0.6, 3.5},
-    {4, 5, 1, 1.0, 0.1},
+    {0, 1, 1, 0.5, 1.0},
+    {1, 7, 1, 0.5, 1.0},
+    {0, 2, 1, 0.5, 1.0},
+    {2, 7, 1, 0.5, 1.0},
+    {0, 3, 1, 0.5, 1.0},
+    {3, 7, 1, 0.5, 1.0},
+    {0, 4, 1, 0.5, 1.0},
+    {4, 7, 1, 0.5, 1.0},
+    {0, 5, 1, 0.5, 1.0},
+    {5, 7, 1, 0.5, 1.0},
 
-    {0, 5, 100, 1.0, 1.0},
+    {1, 2, 1, 0.5, 1.5},
+    {2, 3, 1, 0.5, 2.5},
+    {3, 4, 1, 0.5, 3.5},
+    {4, 5, 1, 0.5, 0.1},
 
-    {1, 5, 1, 0.1, 1.0},
-    {2, 5, 1, 0.1, 1.0},
-    {3, 5, 1, 0.1, 1.0},
+    {0, 7, 100, 1, 0.1},
   };
+  int goal_id = 7;
 
   vector<vector<int>> heuristics = {
     {0, 0},
@@ -75,7 +105,7 @@ void test_planner() {
   unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, true)); 
   // unique_ptr<SBPLPlanner> planner(new LazyARAPlanner(&bg_env, true)); 
   planner->set_start(0);
-  planner->set_goal(5);
+  planner->set_goal(goal_id);
   ReplanParams params(1.0);
   params.initial_eps = 1.0;
   params.final_eps = 1.0;
@@ -84,9 +114,14 @@ void test_planner() {
   vector<sbpl::Path> solution_paths;
   int solution_cost = 0;
   planner->replan(&solution_paths, params, &solution_cost);
-  printf("Found solution with cost %d:\n", solution_cost);
+  printf("Found %d possible paths:\n", static_cast<int>(solution_paths.size()));
   for (size_t ii = 0; ii < solution_paths.size(); ++ii) {
-    cout << solution_paths[ii].cost << " ";
+    const auto &solution_path = solution_paths[ii];
+    cout << "Cost: " << solution_path.cost << "     ";
+    for (size_t jj = 0; jj < solution_path.state_ids.size(); ++jj) {
+      cout << solution_path.state_ids[jj] << " "; 
+    }
+    cout << endl;
   }
   cout << endl;
 }

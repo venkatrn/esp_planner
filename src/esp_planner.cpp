@@ -93,15 +93,39 @@ void ESPPlanner::ExpandState(ESPState *parent) {
   vector<int> edge_groups;
 
   if (bforwardsearch) {
-    environment_wrapper_->GetSuccs(parent->id, &children, &costs, &probabilities, &times, &edge_groups);
+    environment_wrapper_->GetSuccs(parent->id, &children, &costs, &probabilities,
+                                   &times, &edge_groups);
   } else {
-    environment_wrapper_->GetPreds(parent->id, &children, &costs, &probabilities, &times, &edge_groups);
+    environment_wrapper_->GetPreds(parent->id, &children, &costs, &probabilities,
+                                   &times, &edge_groups);
   }
+
 
   //printf("expand %d\n",parent->id);
   //iterate through children of the parent
   for (int i = 0; i < (int)children.size(); i++) {
     //printf("  succ %d\n",children[i]);
+    // Decide if this state should be pruned (happens when we the present path
+    // traverses the same set of lazy edges (possibly more as well) as a
+    // previously expanded path to this state which traversed those exact set
+    // (and nothing more).
+    vector<int> equiv_wrapper_ids = environment_wrapper_->AllSubsetWrapperIDs(
+                                      children[i]);
+    bool prune = false;
+
+    for (const int equiv_wrapper_id : equiv_wrapper_ids) {
+      ESPState *child = GetState(equiv_wrapper_id);
+
+      if (child->iteration_closed == search_iteration) {
+        prune = true;
+        break;
+      }
+    }
+
+    if (prune) {
+      continue;
+    }
+
     ESPState *child = GetState(children[i]);
 
     bool print = false; //state->id == 285566 || parent->id == 285566;
@@ -255,9 +279,11 @@ vector<int> ESPPlanner::GetSearchPath(int state_id, int &solcost) {
     }
 
     if (bforwardsearch) {
-      environment_wrapper_->GetSuccs(state->expanded_best_parent->id, &SuccIDV, &CostV, &ProbV, &TimesV, &EdgeGroupsV);
+      environment_wrapper_->GetSuccs(state->expanded_best_parent->id, &SuccIDV,
+                                     &CostV, &ProbV, &TimesV, &EdgeGroupsV);
     } else {
-      environment_wrapper_->GetPreds(state->expanded_best_parent->id, &SuccIDV, &CostV, &ProbV, &TimesV, &EdgeGroupsV);
+      environment_wrapper_->GetPreds(state->expanded_best_parent->id, &SuccIDV,
+                                     &CostV, &ProbV, &TimesV, &EdgeGroupsV);
     }
 
     int actioncost = INFINITECOST;
@@ -540,23 +566,32 @@ int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
   *solcost = PathCost;
 
   // Get all paths.
-  vector<int> all_goal_wrapper_ids = environment_wrapper_->GetAllGoalWrapperIDs(goal_state_id);
+  vector<int> all_goal_wrapper_ids = environment_wrapper_->GetAllGoalWrapperIDs(
+                                       goal_state_id);
   solution_paths->clear();
   solution_paths->reserve(all_goal_wrapper_ids.size());
+
   for (size_t ii = 0; ii < all_goal_wrapper_ids.size(); ++ii) {
     // Ignore a path to goal if it has not been marked as expanded.
     auto search_state = GetState(all_goal_wrapper_ids[ii]);
-    if(search_state->g != search_state->v) {
+
+    //  Skip any wrapper goal states that were never marked as closed during
+    //  the search.
+    if (search_state->expanded_best_parent == NULL) {
       continue;
     }
-    
+
     int path_cost = 0;
-    vector<int> wrapper_ids_path = GetSearchPath(all_goal_wrapper_ids[ii], path_cost);
-    auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(wrapper_ids_path);
+    vector<int> wrapper_ids_path = GetSearchPath(all_goal_wrapper_ids[ii],
+                                                 path_cost);
+    auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
+                           wrapper_ids_path);
     solution_path.cost = path_cost;
     solution_paths->push_back(solution_path);
   }
-  printf("There are %d paths to the goal\n", static_cast<int>(solution_paths->size()));
+
+  printf("There are %d paths to the goal\n",
+         static_cast<int>(solution_paths->size()));
   environment_wrapper_->wrapper_state_hasher_.Print();
 
   start_state_id = -1;
@@ -566,8 +601,10 @@ int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
 }
 
 int ESPPlanner::set_goal(int id) {
-  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id, -1.0);
-  printf("planner: setting env goal to %d and wrapper goal to %d\n", id, wrapper_goal_id);
+  const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id,
+                                                                      std::numeric_limits<double>::lowest());
+  printf("planner: setting env goal to %d and wrapper goal to %d\n", id,
+         wrapper_goal_id);
 
   if (bforwardsearch) {
     goal_state_id = wrapper_goal_id;
@@ -579,8 +616,9 @@ int ESPPlanner::set_goal(int id) {
 }
 
 int ESPPlanner::set_start(int id) {
-  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 1.0);
-  printf("planner: setting env start to %d and wrapper start to %d\n", id, wrapper_start_id);
+  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 0.0);
+  printf("planner: setting env start to %d and wrapper start to %d\n", id,
+         wrapper_start_id);
 
   if (bforwardsearch) {
     start_state_id = wrapper_start_id;
