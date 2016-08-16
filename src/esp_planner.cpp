@@ -73,6 +73,9 @@ ESPState *ESPPlanner::GetState(int id) {
 
     //compute heuristics
     if (bforwardsearch) {
+      // const double prob = environment_wrapper_->GetStateProbability(s->id);
+      // s->h = static_cast<int>((2.0 - prob)  * 
+      //                         static_cast<double>(environment_wrapper_->GetGoalHeuristic(s->id)));
       s->h = environment_wrapper_->GetGoalHeuristic(s->id);
     } else {
       s->h = environment_wrapper_->GetStartHeuristic(s->id);

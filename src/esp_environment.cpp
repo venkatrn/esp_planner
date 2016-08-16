@@ -83,6 +83,11 @@ int EnvWrapper::GetGoalHeuristic(int state_id) {
   return environment_esp_->GetGoalHeuristic(orig_id);
 }
 
+double EnvWrapper::GetStateProbability(int state_id) {
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(state_id);
+  return exp(wrapper_state.log_prob);
+}
+
 int EnvWrapper::GetStartHeuristic(int state_id) {
   const int orig_id = WrapperToStateID(state_id);
   return environment_esp_->GetStartHeuristic(orig_id);

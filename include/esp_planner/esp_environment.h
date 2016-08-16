@@ -96,6 +96,7 @@ class EnvWrapper {
   virtual bool EvaluateOriginalEdge(int parent_id, int child_id);
   int GetGoalHeuristic(int state_id);
   int GetStartHeuristic(int state_id);
+  double GetStateProbability(int state_id);
   void EnsureHeuristicsUpdated(bool forward_search);
   std::vector<int> GetAllGoalWrapperIDs(int goal_wrapper_id) const;
   sbpl::Path ConvertWrapperIDsPathToSBPLPath(const std::vector<int>
