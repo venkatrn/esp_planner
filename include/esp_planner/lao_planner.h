@@ -25,12 +25,8 @@
 using high_res_clock = std::chrono::high_resolution_clock;
 
 namespace {
-constexpr int kMaxPlannerExpansions = 100000;
 // Tolerance for comparing double numbers.
 constexpr double kDblTolerance = 1e-4;
-// LAO* will terminate when total residual of the best solution graph is less
-// than this value (and when no non-terminal states exist).
-constexpr double kMaxResidualForTermination = 1e-3;
 } // namespace
 
 namespace sbpl {
@@ -127,8 +123,8 @@ struct LAOPlannerParams {
 // two methods:
 
 // void GetSuccs(int source_state_id,
-//               vector<vector<int>* succ_ids,
-//               vector<vector<double>* succ_probabilities,
+//               vector<vector<int>>* succ_ids,
+//               vector<vector<double>>* succ_probabilities,
 //               vector<vector<double>>* action_costs_map);
 //
 // If "k" actions are applicable at the source_state s, then

@@ -215,7 +215,35 @@ int ESPPlanner::ImprovePath() {
     state->iteration_closed = search_iteration;
     //expand the state
     expands++;
-    ExpandState(state);
+
+    const auto &wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(state->id);
+
+    if (wrapper_state.env_state_id == goal_state_id) {
+      goal_wrapper_ids_.push_back(state->id);
+      goal_subsets_.push_back(wrapper_state.lazy_edges);
+    } else {
+      bool is_subset = false;
+
+      // If the current state about to be expanded has a lazy edge set X,
+      // and there is already a goal state (closed) whose lazy edge set is a
+      // subset of X, then we can safely avoid expanding this state since it
+      // will lead only to a worse path.
+      for (const auto &goal_subset : goal_subsets_) {
+        is_subset = std::includes(wrapper_state.lazy_edges.begin(),
+                                  wrapper_state.lazy_edges.end(),
+                                  goal_subset.begin(),
+                                  goal_subset.end());
+
+        if (is_subset) {
+          break;
+        }
+      }
+
+      if (!is_subset) {
+        ExpandState(state);
+      }
+    }
 
     if (expands % 100000 == 0) {
       printf("expands so far=%u\n", expands);
@@ -326,19 +354,26 @@ vector<int> ESPPlanner::GetSearchPath(int state_id, int &solcost) {
 
 int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
   using namespace sbpl;
+
+  if (paths.empty()) {
+    printf("WARNING: There are no paths to goal!\n");
+    return -1;
+  }
+
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
   ssp->SetPaths(paths);
 
   const int num_edges = ssp->NumStochasticEdges();
   SSPState start_state(num_edges);
   start_state.suboptimality_bound = ssp->GetSuboptimalityBound(start_state);
-  const int start_id = ssp->state_hasher_.GetStateIDForceful(start_state);
+  int start_id = ssp->state_hasher_.GetStateIDForceful(start_state);
 
   LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
   lao_planner.SetStart(start_id);
-  lao_planner.Plan(LAOPlannerParams::ParamsForOptimalPolicy());
+  // lao_planner.Plan(LAOPlannerParams::ParamsForOptimalPolicy());
+  lao_planner.Plan(LAOPlannerParams::ParamsForOnlinePolicy(0.01));
 
-  const auto &policy_map = lao_planner.GetPolicyMap();
+   auto policy_map = lao_planner.GetPolicyMap();
   printf("Policy for Edge Evaluation\n");
 
   for (const auto &element : policy_map) {
@@ -350,7 +385,7 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
   // Actually run the policy.
   SSPState current_state = start_state;
   const double kBoundForTermination = 1e-3;
-  int best_valid_path_idx = -1;
+  int best_valid_path_idx = 0;
 
   while (ssp->GetSuboptimalityBound(current_state) > kBoundForTermination) {
     // Best action to execute.
@@ -363,7 +398,14 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
       cout << "ERROR: We do not have a policy for state " << current_state_id << endl
            <<
            current_state << endl;
-      return -1;
+      
+      start_id = ssp->state_hasher_.GetStateIDForceful(current_state);
+      lao_planner = LAOPlanner<EdgeSelectorSSP>(ssp);
+      lao_planner.SetStart(start_id);
+      lao_planner.Plan(LAOPlannerParams::ParamsForOnlinePolicy(0.01));
+      policy_map = lao_planner.GetPolicyMap();
+      continue;
+      // return -1;
     }
 
     const int edge_id = it->second;
@@ -382,6 +424,7 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
     best_valid_path_idx = ssp->GetBestValidPathIdx(current_state);
     printf("Current best path idx is %d\n", best_valid_path_idx);
     cout << "Current state " << current_state.to_string() << endl;
+    cout << "Current bound " << ssp->GetSuboptimalityBound(current_state) << endl;
   }
 
   return best_valid_path_idx;

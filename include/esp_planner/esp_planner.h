@@ -121,6 +121,9 @@ class ESPPlanner : public SBPLPlanner {
   int goal_state_id;
   int start_state_id;
 
+  std::vector<int> goal_wrapper_ids_;
+  std::vector<std::set<int>> goal_subsets_;
+
   // Environment.
   std::unique_ptr<EnvWrapper> environment_wrapper_; 
 
