@@ -106,6 +106,19 @@ class ESPPlanner : public SBPLPlanner {
 
   // Planner for computing optimal edge evaluation policy.
   virtual int GetTruePathIdx(const std::vector<sbpl::Path> &paths);
+  // Evaluate all lazy edges in all paths, and return the idx of the best valid
+  // path.
+  virtual int GetTruePathIdxAllEdges(const std::vector<sbpl::Path> &paths);
+  
+
+  // Helper for computing and executing edge evaluation policy. Returns -1 if
+  // no valid path was found, otherwise returns the wrapper state ID
+  // corresponding to the valid path.
+  int RunEvaluation();
+  std::vector<sbpl::Path> GetCurrentSolutionPaths(std::vector<int>* path_ids);
+  std::unordered_set<int> evaluated_goal_wrapper_ids_;
+  std::vector<sbpl::Edge> invalid_edges_;
+  std::vector<sbpl::Edge> valid_edges_;
 
  protected:
   //data structures (open and incons lists)

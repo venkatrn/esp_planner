@@ -178,6 +178,12 @@ std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id) const {
   return subset_wrapper_ids;
 }
 
+bool EnvWrapper::WrapperContainsOriginalEdge(int wrapper_state_id, const sbpl::Edge& edge) {
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
+  const int edge_id = edge_hasher_.GetStateID(edge);
+  return (wrapper_state.lazy_edges.find(edge_id) != wrapper_state.lazy_edges.end());
+}
+
 sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>
                                                        &wrapper_ids_path) {
   sbpl::Path path;
