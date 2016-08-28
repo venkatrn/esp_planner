@@ -28,6 +28,10 @@ class EnvironmentESP : public virtual DiscreteSpaceInformation {
     throw std::runtime_error("GetPreds has not been implemented for this environment");
   }
 
+  virtual int GetGoalHeuristic(int heuristic_id, int state_id) {
+    return GetGoalHeuristic(state_id);
+  }
+
   // Unused methods.
   virtual bool InitializeEnv(const char *) override {return true;};
   virtual bool InitializeMDPCfg(MDPConfig *) override {return true;};
@@ -95,6 +99,7 @@ class EnvWrapper {
                 std::vector<double> *edge_eval_times, std::vector<int> *edge_groups = nullptr);
   virtual bool EvaluateOriginalEdge(int parent_id, int child_id);
   int GetGoalHeuristic(int state_id);
+  int GetGoalHeuristic(int heuristic_id, int state_id);
   int GetStartHeuristic(int state_id);
   double GetStateProbability(int state_id);
   void EnsureHeuristicsUpdated(bool forward_search);

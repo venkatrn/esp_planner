@@ -43,7 +43,7 @@ add_library(esp_planner
   src/esp_utils.cpp
   src/edge_selector_ssp.cpp
   src/lao_planner.cpp
-  src/esp_planner.cpp
+  src/esp_mha_planner.cpp
   src/esp_environment.cpp
 )
 target_link_libraries(esp_planner ${catkin_LIBRARIES})
