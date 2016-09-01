@@ -95,6 +95,7 @@ struct LAOPlannerParams {
   // Otherwise, planning will use the existing solution graph. Use the latter
   // option when running the planner in an online setting.
   bool plan_from_scratch = true;
+  bool verbose = false;
 
   // Provide some commonly used parameter settings.
   static LAOPlannerParams Default() {
@@ -114,6 +115,14 @@ struct LAOPlannerParams {
     params.max_expansions = std::numeric_limits<int>::max();
     params.max_allowed_bellman_residual = 1e-10;
     params.plan_from_scratch = false;
+    return params;
+  }
+  static LAOPlannerParams ParamsForGreedyOneStepPolicy() {
+    LAOPlannerParams params;
+    params.max_plan_time = std::numeric_limits<double>::max();
+    params.max_expansions = 1;
+    params.max_allowed_bellman_residual = 1e-10;
+    params.plan_from_scratch = true;
     return params;
   }
 };
@@ -265,7 +274,9 @@ template <class AbstractMDP>
 void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(
   std::vector<int> *state_ids,
   std::vector<int> *action_ids) {
-  printf("[LAO Planner]: Reconstructing optimistic path\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: Reconstructing optimistic path\n");
+  }
   assert(state_ids != nullptr);
   assert(action_ids != nullptr);
   state_ids->clear();
@@ -313,7 +324,9 @@ void LAOPlanner<AbstractMDP>::ReconstructOptimisticPath(
     }
   }
 
-  printf("[LAO Planner]: Path reconstruction successful\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: Path reconstruction successful\n");
+  }
   return;
 }
 
@@ -321,7 +334,9 @@ template <class AbstractMDP>
 void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(
   std::vector<int> *state_ids,
   std::vector<int> *action_ids) {
-  printf("[LAO Planner]: Reconstructing most likely path\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: Reconstructing most likely path\n");
+  }
   assert(state_ids != nullptr);
   assert(action_ids != nullptr);
   state_ids->clear();
@@ -369,7 +384,9 @@ void LAOPlanner<AbstractMDP>::ReconstructMostLikelyPath(
     }
   }
 
-  printf("[LAO Planner]: Path reconstruction successful\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: Path reconstruction successful\n");
+  }
   return;
 }
 
@@ -403,7 +420,10 @@ bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
     total_residual = 0;
 
     if (planner_stats_.expansions > planner_params_.max_expansions) {
-      printf("[LAO Planner]: Exceeded max expansion. Use current policy at your own risk.\n");
+      if (planner_params_.max_expansions != 1) {
+        printf("[LAO Planner]: Exceeded max expansion. Use current policy at your own risk.\n");
+      }
+
       break;
     }
 
@@ -538,13 +558,17 @@ bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
   planner_stats_.cost = state_hasher_.GetState(start_state_id_).v;
 
   // Reconstruct path
-  printf("[LAO Planner]: LAO* done, reconstructing optimal policy\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: LAO* done, reconstructing optimal policy\n");
+  }
 
   // DFS traversal of the final solution graph after convergence is the optimal
   // policy.
   std::vector<int> dfs_traversal;
   DFSTraversal(&dfs_traversal);
-  printf("[LAO Planner]: Finished econstructing optimal policy\n");
+  if (planner_params_.verbose) {
+    printf("[LAO Planner]: Finished reconstructing optimal policy\n");
+  }
 
   for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
     PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);

@@ -106,7 +106,7 @@ class ESPPlanner : public SBPLPlanner {
     printf("Not supported. Use ReplanParams");
   };
 
-  ESPPlanner(EnvironmentESP *environment, bool bforwardsearch);
+  ESPPlanner(EnvironmentESP *environment, int num_heuristics, bool bforwardsearch);
   ~ESPPlanner();
 
   virtual void get_search_stats(std::vector<PlannerStats> *s);
@@ -125,8 +125,8 @@ class ESPPlanner : public SBPLPlanner {
   int RunEvaluation(int* goal_wrapper_id);
   std::vector<sbpl::Path> GetCurrentSolutionPaths(std::vector<int>* path_ids);
   std::unordered_set<int> evaluated_goal_wrapper_ids_;
-  std::vector<sbpl::Edge> invalid_edges_;
-  std::vector<sbpl::Edge> valid_edges_;
+  std::unordered_set<sbpl::Edge> invalid_edges_;
+  std::unordered_set<sbpl::Edge> valid_edges_;
 
  protected:
   //data structures (open and incons lists)
@@ -151,6 +151,7 @@ class ESPPlanner : public SBPLPlanner {
 
   //mha params
   int num_heuristics;
+  int expands;
   double inflation_eps, anchor_eps;
   bool use_anchor;
   mha_planner::PlannerType planner_type;

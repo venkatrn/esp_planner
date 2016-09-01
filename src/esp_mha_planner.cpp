@@ -36,6 +36,12 @@ namespace {
 // Maximum time allowed for computing an LAO policy. Note that this time could
 // be exceeded if it takes longer to compute an action for the start state.
 constexpr double kMaxLAOPolicyPlanningTime = 0.01; // s
+
+// Should a queue be "retired" afer it has generated a state with 0 heuristic?
+constexpr bool kUseDTSRetirement = true;
+
+// Which queues should disallow sharing to them.
+int probability_queue = 0;
 }
 
 using namespace boost::math;
@@ -43,14 +49,15 @@ using namespace std;
 using namespace mha_planner;
 
 ESPPlanner::ESPPlanner(EnvironmentESP *environment,
+                       int num_heuristics,
                        bool bSearchForward) :
-  params(0.0) {
+  params(0.0),
+  num_heuristics(num_heuristics) {
+  probability_queue = num_heuristics - 1;
   bforwardsearch = bSearchForward;
   environment_wrapper_.reset(new EnvWrapper(environment));
   replan_number = 0;
 
-  // One for anchor and one for probability.
-  num_heuristics = 2;
   heaps.resize(num_heuristics);
   incons.resize(num_heuristics);
   states.resize(num_heuristics);
@@ -63,7 +70,7 @@ ESPPlanner::ESPPlanner(EnvironmentESP *environment,
   // DTS
   alpha.resize(num_heuristics, 1.0);
   beta.resize(num_heuristics, 1.0);
-  betaC = 10;
+  betaC = 3;
   gsl_rng_env_setup();
   gsl_rand_T = gsl_rng_default;
   gsl_rand = gsl_rng_alloc(gsl_rand_T);
@@ -122,6 +129,7 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
       s->h = environment_wrapper_->GetGoalHeuristic(q_id, s->id);
     }
   }
+
   return s;
 }
 
@@ -169,18 +177,22 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
   //DTS
   int prev_best_h = queue_best_h_dts[q_id];
 
+  // SMHA sharing.
   for (int i = 0; i < (int)children.size(); i++) {
     //printf("  succ %d\n",children[i]);
-    for (int j = 0; j < num_heuristics; ++j) {
-      // if (use_anchor && q_id == 0 && j != 0) continue;
+    vector<int> equiv_wrapper_ids = environment_wrapper_->AllSubsetWrapperIDs(
+                                      children[i]);
+    bool prune = false;
 
-      vector<int> equiv_wrapper_ids = environment_wrapper_->AllSubsetWrapperIDs(
-                                        children[i]);
-      bool prune = false;
+    for (const int equiv_wrapper_id : equiv_wrapper_ids) {
+      for (int k = 0; k < num_heuristics; ++k) {
+        // Don't check subset condition if we are expanding from anchor and
+        // the state is closed inadmissibly.
+        if (q_id == 0 && k != 0) {
+          continue;
+        }
 
-      for (const int equiv_wrapper_id : equiv_wrapper_ids) {
-        ESPState *child = GetState(j, equiv_wrapper_id);
-
+        ESPState *child = GetState(k, equiv_wrapper_id);
         if (child->iteration_closed == search_iteration) {
           prune = true;
           break;
@@ -188,8 +200,22 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
       }
 
       if (prune) {
+        break;
+      }
+    }
+
+    if (prune) {
+      continue;
+    }
+
+    for (int j = 0; j < num_heuristics; ++j) {
+      // if (use_anchor && q_id == 0 && j != 0) continue;
+      // Don't add to the unshared queue unless we are expanding from that
+      // queue.
+      if (j == probability_queue && q_id != j) {
         continue;
       }
+
 
       ESPState *child = GetState(j, children[i]);
 
@@ -228,9 +254,9 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
         }
 
         // TODO: Remove this after verifying it works
-        key = queue_best_h_meta_heaps[j].getminkeyheap();
-        int best_h = key.key[0];
-        assert(best_h >= 0);
+        // key = queue_best_h_meta_heaps[j].getminkeyheap();
+        // int best_h = key.key[0];
+        // assert(best_h >= 0);
       }
 
       //if (best_h == 0)
@@ -269,6 +295,10 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
     if (planner_type == mha_planner::PlannerType::SMHA) {
       for (int j = 0; j < num_heuristics; ++j) {
         if (j != q_id) {
+          if (j == probability_queue) {
+            continue;
+          }
+
           BestHState *best_h_state_to_del = GetBestHState(j, parent->id);
           queue_best_h_meta_heaps[j].deleteheap(best_h_state_to_del);
         }
@@ -355,7 +385,8 @@ void ESPPlanner::putStateInHeap(int q_id, ESPState *state) {
       } else {
         key.key[0] = long(state->h);
         // key.key[1] = long(state->g);
-        key.key[1] = long(state->g + int(inflation_eps * environment_wrapper_->GetGoalHeuristic(state->id)));
+        key.key[1] = long(state->g + int(inflation_eps *
+                                         environment_wrapper_->GetGoalHeuristic(state->id)));
       }
 
       break;
@@ -366,7 +397,8 @@ void ESPPlanner::putStateInHeap(int q_id, ESPState *state) {
         key.key[0] = long(state->g + state->h);
       } else {
         key.key[0] = long(state->h);
-        key.key[1] = long(state->g + environment_wrapper_->GetGoalHeuristic(state->id));
+        key.key[1] = long(state->g + environment_wrapper_->GetGoalHeuristic(
+                            state->id));
       }
 
       break;
@@ -405,7 +437,7 @@ int ESPPlanner::ImprovePath() {
   //if the goal <= min key in any list whose min key <= min key0 * w2
 
   //expand states until done
-  int expands = 0;
+  expands = 0;
   bool spin_again = false;
   int q_id = 0;
   CKey min_key = heaps[0].getminkeyheap();
@@ -446,7 +478,8 @@ int ESPPlanner::ImprovePath() {
 
     case mha_planner::MHAType::FOCAL: {
 
-      if ((goal_state->g > int(inflation_eps * anchor_val)) && (goal_state->v > inflation_eps * anchor_val)) {
+      if ((goal_state->g > int(inflation_eps * anchor_val)) &&
+          (goal_state->v > inflation_eps * anchor_val)) {
         terminate = false;
       }
 
@@ -496,7 +529,7 @@ int ESPPlanner::ImprovePath() {
       // Note: The alternative would be to find a q_id whose min_key is within the suboptimality bound.
       if (best_q_min_key.key[0] > anchor_eps * anchor_val) {
         printf("Anchors aweigh! chosen queue (%d) has min key %ld and anchor has min key %d\n",
-                 q_id, best_q_min_key.key[0], anchor_val);
+               q_id, best_q_min_key.key[0], anchor_val);
         //std::cin.get();
         q_id = 0;
       } else if (q_id != 0) {
@@ -516,11 +549,11 @@ int ESPPlanner::ImprovePath() {
 
       if (mha_lite_anchor) {
         printf("Anchor state ID:%d   G:%d    H:%d\n", anchor_state->id,
-                 anchor_state->g, anchor_state->h);
+               anchor_state->g, anchor_state->h);
         printf("Anchors aweigh! chosen queue (%d) has f-val %d, anchor-h %d, minkey %ld, and anchor has min key %d\n",
-                 q_id, anchor_state->g + anchor_state->h,
-                 int(inflation_eps * anchor_state->h), best_q_min_key.key[0],
-                 anchor_val);
+               q_id, anchor_state->g + anchor_state->h,
+               int(inflation_eps * anchor_state->h), best_q_min_key.key[0],
+               anchor_val);
         //std::cin.get();
 
         // Get best state from eps-focal list. There will be atleast one state because FOCAL is a subset of
@@ -541,6 +574,11 @@ int ESPPlanner::ImprovePath() {
 
           // Skip this state if it was already expanded inadmissibly
           if (uhs_state->iteration_closed == search_iteration) {
+            continue;
+          }
+
+          // Skip this state if it is not in the heap.
+          if (uhs_state->heapindex == 0) {
             continue;
           }
 
@@ -566,11 +604,11 @@ int ESPPlanner::ImprovePath() {
 
       if (mha_lite_anchor) {
         printf("Anchor state ID:%d   G:%d    H:%d\n", anchor_state->id,
-                 anchor_state->g, anchor_state->h);
+               anchor_state->g, anchor_state->h);
         printf("Anchors aweigh! chosen queue (%d) has f-val %d, anchor-h %d, minkey %ld, and anchor has min key %d\n",
-                 q_id, anchor_state->g + anchor_state->h,
-                 int(inflation_eps * anchor_state->h), best_q_min_key.key[0],
-                 anchor_val);
+               q_id, anchor_state->g + anchor_state->h,
+               int(inflation_eps * anchor_state->h), best_q_min_key.key[0],
+               anchor_val);
         //std::cin.get();
 
         // Get best state from eps-focal list. There will be atleast one state because FOCAL is a subset of
@@ -591,6 +629,11 @@ int ESPPlanner::ImprovePath() {
 
           // Skip this state if it was already expanded inadmissibly
           if (uhs_state->iteration_closed == search_iteration) {
+            continue;
+          }
+
+          // Skip this state if it is not in the heap.
+          if (uhs_state->heapindex == 0) {
             continue;
           }
 
@@ -659,6 +702,10 @@ int ESPPlanner::ImprovePath() {
         //TODO(Venkat): don't delete from anchor
         // if (use_anchor && j==0) continue;
         if (j != q_id) {
+          if (j == probability_queue) {
+            continue;
+          }
+
           ESPState *state_to_delete = GetState(j, state->id);
 
           if (state_to_delete->iteration_closed == search_iteration) {
@@ -675,8 +722,8 @@ int ESPPlanner::ImprovePath() {
     // GBFS (fast-downward) allows re-expansions
     if (mha_type != mha_planner::MHAType::GBFS && state->v == state->g) {
       printf("ERROR: consistent state is being expanded\n");
-      printf("id=%d v=%d g=%d\n",
-             state->id, state->v, state->g);
+      printf("id=%d, q_id=%d, v=%d g=%d\n",
+             state->id, state->q_id, state->v, state->g);
       //throw new SBPL_Exception(); //TODO: SMHA-specific
     }
 
@@ -689,6 +736,9 @@ int ESPPlanner::ImprovePath() {
       // if (use_anchor && q_id==0) break;
       for (int j = 0; j < num_heuristics; j++) {
         // if (use_anchor && q_id == 0 && j != 0) {
+        if (j == probability_queue && q_id != j) {
+          continue;
+        }
 
         if (mha_type == mha_planner::MHAType::GBFS) {
           if (use_anchor && q_id != 0 && j == 0) {
@@ -718,8 +768,12 @@ int ESPPlanner::ImprovePath() {
       // TODO: this is experimental. We want to do this only when we have a at
       // least a few paths to work with.
       valid_path_idx = RunEvaluation(&valid_goal_wrapper_id);
+      // Reset meta-methods.
+      queue_best_h_dts.clear();
+      queue_best_h_dts.resize(num_heuristics, INFINITECOST);
 
       if (valid_path_idx != -1) {
+        // TODO: check current termination for weighted versions.
         break;
       }
     } else {
@@ -740,20 +794,9 @@ int ESPPlanner::ImprovePath() {
         }
       }
 
-      bool is_feasible = true;
-
-      // TODO: this is horrible. Either swap the check direction, or even
-      // better remove states from OPEN that are known to be infeasible.
-      for (const auto &invalid_edge : invalid_edges_) {
-        if (environment_wrapper_->WrapperContainsOriginalEdge(state->id,
-                                                              invalid_edge)) {
-          is_feasible = false;
-          // printf("Wrapper contains invalid edge!\n");
-          break;
-
-        }
-      }
-
+      // If the state about to be expanded traverses some edges already known
+      // to be invalid, skip it.
+      bool is_feasible = !(environment_wrapper_->WrapperContainsInvalidEdge(state->id, invalid_edges_));
       if (!is_subset && is_feasible) {
         ExpandState(q_id, state);
       }
@@ -772,16 +815,20 @@ int ESPPlanner::ImprovePath() {
 
   if (valid_path_idx != -1) {
     // Hack.
-    ESPState* temp_goal_state;
+    ESPState *temp_goal_state;
+
     for (int ii = 0; ii < num_heuristics; ++ii) {
       temp_goal_state = GetState(ii, valid_goal_wrapper_id);
+
       if (temp_goal_state->expanded_best_parent != NULL) {
         break;
       }
     }
+
     if (temp_goal_state->expanded_best_parent == NULL) {
       printf("The goal state doesn't have a best expanded parent!!\n");
     }
+
     *goal_state = *temp_goal_state;
     goal_state->id = goal_state_id;
   }
@@ -824,7 +871,7 @@ void ESPPlanner::checkHeaps(string msg) {
       sameSizes = false;
       printf("%s\n", msg.c_str());
       printf("heap[0] has size %d and heap[%d] has size %d\n", heaps[0].currentsize,
-                i, heaps[i].currentsize);
+             i, heaps[i].currentsize);
       std::cin.get();
     }
   }
@@ -851,11 +898,11 @@ void ESPPlanner::checkHeaps(string msg) {
               state->expanded_best_parent != state2->expanded_best_parent) {
             printf("%s\n", msg.c_str());
             printf("state %d found in queues 0 and %d but state internals didn't match\n",
-                      state->id, j);
+                   state->id, j);
             printf("heap 0: g=%d v=%d parent=%p expanded_parent=%p\n",
-                      state->g, state->v, state->best_parent, state->expanded_best_parent);
+                   state->g, state->v, state->best_parent, state->expanded_best_parent);
             printf("heap %d: g=%d v=%d parent=%p expanded_parent=%p\n", j,
-                      state2->g, state2->v, state2->best_parent, state2->expanded_best_parent);
+                   state2->g, state2->v, state2->best_parent, state2->expanded_best_parent);
             std::cin.get();
           }
 
@@ -873,7 +920,7 @@ void ESPPlanner::checkHeaps(string msg) {
 
 }
 
-vector<int> ESPPlanner::GetSearchPath(ESPState* end_state, int &solcost) {
+vector<int> ESPPlanner::GetSearchPath(ESPState *end_state, int &solcost) {
   vector<int> SuccIDV;
   vector<int> CostV;
   vector<int> wholePathIds;
@@ -970,17 +1017,16 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
   LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
   lao_planner.SetStart(start_id);
   // lao_planner.Plan(LAOPlannerParams::ParamsForOptimalPolicy());
-  lao_planner.Plan(LAOPlannerParams::ParamsForOnlinePolicy(
-                     kMaxLAOPolicyPlanningTime));
+  lao_planner.Plan(LAOPlannerParams::ParamsForGreedyOneStepPolicy());
 
   auto policy_map = lao_planner.GetPolicyMap();
-  printf("Policy for Edge Evaluation\n");
+  // printf("Policy for Edge Evaluation\n");
 
-  for (const auto &element : policy_map) {
-    const int state_id = element.first;
-    const SSPState state = ssp->state_hasher_.GetState(state_id);
-    cout << state << endl << "Action: " << element.second << endl << endl;
-  }
+  // for (const auto &element : policy_map) {
+  //   const int state_id = element.first;
+  //   const SSPState state = ssp->state_hasher_.GetState(state_id);
+  //   cout << state << endl << "Action: " << element.second << endl << endl;
+  // }
 
   // Actually run the policy.
   SSPState current_state = start_state;
@@ -995,14 +1041,14 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
     auto it = policy_map.find(current_state_id);
 
     if (it == policy_map.end()) {
-      cout << "ERROR: We do not have a policy for state " << current_state_id << endl
-           <<
-           current_state << endl;
+      // cout << "ERROR: We do not have a policy for state " << current_state_id << endl
+      //      <<
+      //      current_state << endl;
 
       start_id = ssp->state_hasher_.GetStateIDForceful(current_state);
       lao_planner = LAOPlanner<EdgeSelectorSSP>(ssp);
       lao_planner.SetStart(start_id);
-      lao_planner.Plan(LAOPlannerParams::ParamsForOnlinePolicy(0.01));
+      lao_planner.Plan(LAOPlannerParams::ParamsForGreedyOneStepPolicy());
       policy_map = lao_planner.GetPolicyMap();
       continue;
       // return -1;
@@ -1017,16 +1063,18 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
 
     if (valid) {
       current_state.valid_bits.set(edge_id, true);
-      valid_edges_.push_back(edge_to_evaluate);
+      valid_edges_.insert(edge_to_evaluate);
     } else {
       current_state.invalid_bits.set(edge_id, true);
-      invalid_edges_.push_back(edge_to_evaluate);
+      invalid_edges_.insert(edge_to_evaluate);
+      printf("Edge failed %d:  (%d  %d) \n", edge_id, edge_to_evaluate.first,
+             edge_to_evaluate.second);
     }
 
     best_valid_path_idx = ssp->GetBestValidPathIdx(current_state);
-    printf("Current best path idx is %d\n", best_valid_path_idx);
-    cout << "Current state " << current_state.to_string() << endl;
-    cout << "Current bound " << ssp->GetSuboptimalityBound(current_state) << endl;
+    // printf("Current best path idx is %d\n", best_valid_path_idx);
+    // cout << "Current state " << current_state.to_string() << endl;
+    // cout << "Current bound " << ssp->GetSuboptimalityBound(current_state) << endl;
   }
 
   return best_valid_path_idx;
@@ -1063,10 +1111,10 @@ int ESPPlanner::GetTruePathIdxAllEdges(const std::vector<sbpl::Path> &paths) {
 
     if (valid) {
       current_state.valid_bits.set(edge_id, true);
-      valid_edges_.push_back(edge_to_evaluate);
+      valid_edges_.insert(edge_to_evaluate);
     } else {
       current_state.invalid_bits.set(edge_id, true);
-      invalid_edges_.push_back(edge_to_evaluate);
+      invalid_edges_.insert(edge_to_evaluate);
     }
 
     best_valid_path_idx = ssp->GetBestValidPathIdx(current_state);
@@ -1079,7 +1127,7 @@ int ESPPlanner::GetTruePathIdxAllEdges(const std::vector<sbpl::Path> &paths) {
   return best_valid_path_idx;
 }
 
-int ESPPlanner::RunEvaluation(int* valid_goal_wrapper_id) {
+int ESPPlanner::RunEvaluation(int *valid_goal_wrapper_id) {
   *valid_goal_wrapper_id = -1;
   vector<int> path_ids;
   auto possible_paths = GetCurrentSolutionPaths(&path_ids);
@@ -1155,7 +1203,7 @@ void ESPPlanner::initializeSearch() {
   // mha_type = params.mha_type;
   meta_search_type = mha_planner::MetaSearchType::DTS;
   planner_type = mha_planner::PlannerType::SMHA;
-  mha_type = mha_planner::MHAType::PLUS;
+  mha_type = mha_planner::MHAType::FOCAL;
   use_anchor = true;
   // Reset the Meta-A* state variables
   queue_expands.clear();
@@ -1214,7 +1262,7 @@ void ESPPlanner::initializeSearch() {
     start_state = GetState(ii, start_state_id);
     start_state->g = 0;
     CKey key;
-    key.key[0] = inflation_eps * start_state->h;
+    key.key[0] = start_state->h;
     heaps[ii].insertheap(start_state, key);
 
     queue_best_h_dts[ii] = start_state->h;
@@ -1338,6 +1386,10 @@ void ESPPlanner::prepareNextSearchIteration() {
 }
 
 int ESPPlanner::GetBestHeuristicID() {
+  if (queue_best_h_dts[probability_queue] != 0) {
+    return probability_queue;
+  }
+
   // Note: Anchor is skipped for original MHA, but not for lite
   int starting_ind;
 
@@ -1437,7 +1489,8 @@ int ESPPlanner::GetBestHeuristicID() {
     vector<double> rand_vals(num_heuristics, 0);
 
     for (int i = starting_ind; i < num_heuristics; i++) {
-      if (queue_best_h_dts[i] == 0 ||
+      // bool retire_queue = kUseDTSRetirement && i == probability_queue;
+      if ((kUseDTSRetirement && queue_best_h_dts[i] == 0) ||
           heaps[i].getminkeyheap().key[0] >= INFINITECOST) {
         if (print) {
           printf("%d: done\n", i);
@@ -1641,11 +1694,13 @@ vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
 
   for (size_t ii = 0; ii < all_goal_wrapper_ids.size(); ++ii) {
     // Ignore a path to goal if it has not been marked as expanded.
-    
+
     // Find the queue from which it was expanded.
-    ESPState* search_state;
+    ESPState *search_state;
+
     for (size_t jj = 0; jj < num_heuristics; ++jj) {
       search_state = GetState(jj, all_goal_wrapper_ids[ii]);
+
       if (search_state->expanded_best_parent != NULL) {
         break;
       }

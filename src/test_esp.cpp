@@ -1,7 +1,7 @@
 #include <esp_planner/edge_selector_ssp.h>
 #include <esp_planner/lao_planner.h>
 #include <esp_planner/esp_utils.h>
-#include <esp_planner/esp_planner.h>
+#include <esp_planner/esp_mha_planner.h>
 #include <ros/package.h>
 
 #include <iostream>
@@ -102,7 +102,7 @@ void test_planner() {
   }
 
   EnvBGStochastic bg_env(g);
-  unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, true));
+  unique_ptr<ESPPlanner> planner(new ESPPlanner(&bg_env, 1, true));
   // unique_ptr<SBPLPlanner> planner(new LazyARAPlanner(&bg_env, true));
   planner->set_start(0);
   planner->set_goal(goal_id);

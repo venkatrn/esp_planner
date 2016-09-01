@@ -5,6 +5,7 @@ using namespace std;
 namespace {
 // Tolerance for comparing double numbers.
 constexpr double kDblTolerance = 1e-4;
+constexpr bool kUseCaching = false;
 } // namespace
 
 EnvWrapper::EnvWrapper(EnvironmentESP *env_esp) {
@@ -19,13 +20,15 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                           std::vector<int> *costs, std::vector<double> *edge_probabilities,
                           std::vector<double> *edge_eval_times, std::vector<int> *edge_groups) {
 
-  if (succs_cache_.find(parent_id) != succs_cache_.end()) {
-    *succ_ids = succs_cache_[parent_id];
-    *costs = costs_cache_[parent_id];
-    *edge_probabilities = probs_cache_[parent_id];
-    *edge_eval_times = time_cache_[parent_id];
-    edge_groups->clear();
-    return;
+  if (kUseCaching) {
+    if (succs_cache_.find(parent_id) != succs_cache_.end()) {
+      *succ_ids = succs_cache_[parent_id];
+      *costs = costs_cache_[parent_id];
+      *edge_probabilities = probs_cache_[parent_id];
+      *edge_eval_times = time_cache_[parent_id];
+      edge_groups->clear();
+      return;
+    }
   }
 
   const auto &parent_wrapper = wrapper_state_hasher_.GetState(parent_id);
@@ -65,10 +68,12 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     succ_ids->at(ii) = wrapper_succ_id;
   }
 
-  succs_cache_[parent_id] = *succ_ids;
-  costs_cache_[parent_id] = *costs;
-  probs_cache_[parent_id] = *edge_probabilities;
-  time_cache_[parent_id] = *edge_eval_times;
+  if (kUseCaching) {
+    succs_cache_[parent_id] = *succ_ids;
+    costs_cache_[parent_id] = *costs;
+    probs_cache_[parent_id] = *edge_probabilities;
+    time_cache_[parent_id] = *edge_eval_times;
+  }
 }
 
 void EnvWrapper::GetPreds(int parent_id, std::vector<int> *succ_ids,
@@ -187,6 +192,19 @@ bool EnvWrapper::WrapperContainsOriginalEdge(int wrapper_state_id, const sbpl::E
   const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
   const int edge_id = edge_hasher_.GetStateID(edge);
   return (wrapper_state.lazy_edges.find(edge_id) != wrapper_state.lazy_edges.end());
+}
+
+bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id, const std::unordered_set<sbpl::Edge>& edges) {
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
+  bool contains_invalid_edge = false;
+  for (const auto &edge_id : wrapper_state.lazy_edges) {
+    const auto& edge = edge_hasher_.GetState(edge_id);
+    if (edges.find(edge) != edges.end()) {
+      contains_invalid_edge = true;
+      break;
+    }
+  }
+  return contains_invalid_edge;
 }
 
 sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>

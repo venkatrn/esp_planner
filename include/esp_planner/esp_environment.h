@@ -119,7 +119,10 @@ class EnvWrapper {
   // Returns ID of the newly created state, or the existing state.
   int GetWrapperStateID(int state_id, double prob,
                         const std::set<int> &lazy_edges = std::set<int>());
+  // Does wrapper_state.lazy_edges contain edge.
   bool WrapperContainsOriginalEdge(int wrapper_state_id, const sbpl::Edge& edge);
+  // Does edges contain any of the edges in wrapper_state.lazy_edges.
+  bool WrapperContainsInvalidEdge(int wrapper_state_id, const std::unordered_set<sbpl::Edge>& edges);
   friend class ESPPlanner;
 
  private:

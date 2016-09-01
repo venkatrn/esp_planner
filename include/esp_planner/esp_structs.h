@@ -37,3 +37,12 @@ struct Path {
   int cost = 0;
 };
 } // namespace sbpl
+
+namespace std {
+template <>
+struct hash<sbpl::Edge> {
+  std::size_t operator()(const sbpl::Edge &edge) const {
+    return edge.GetHash();
+  }
+};
+} // namespace std
