@@ -3,7 +3,7 @@
 #include <boost/functional/hash.hpp>
 
 namespace {
-  const bool kBidirectionalEdges = true;
+  const bool kBidirectionalEdges = false;
 }
 
 namespace sbpl {

@@ -115,7 +115,7 @@ class EdgeSelectorSSP {
                      int *upper_bound) const;
   void ComputeBounds(const SSPState &ssp_state, int *lower_bound,
                      int *upper_bound, int *lower_bound_idx, int *upper_bound_idx) const;
-  int GetSuboptimalityBound(const SSPState &ssp_state) const;
+  double GetSuboptimalityBound(const SSPState &ssp_state) const;
   double ComputeTransitionCost(const SSPState &parent_state,
                                const SSPState &child_state, int edge_id) const;
 };

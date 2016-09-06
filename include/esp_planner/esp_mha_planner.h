@@ -33,7 +33,7 @@
 #include <esp_planner/esp_environment.h>
 #include <esp_planner/esp_structs.h>
 
-#include <sbpl/headers.h>
+// #include <sbpl/headers.h>
 #include <sbpl/planners/mha_planner.h>
 #include <queue>
 #include <memory>
@@ -41,6 +41,9 @@
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 
+#include <chrono>
+
+using high_res_clock = std::chrono::high_resolution_clock;
 
 class ESPState: public AbstractSearchState {
  public:
@@ -110,6 +113,7 @@ class ESPPlanner : public SBPLPlanner {
   ~ESPPlanner();
 
   virtual void get_search_stats(std::vector<PlannerStats> *s);
+  virtual void get_ee_stats(std::vector<PlannerStats> *s);
 
   // Planner for computing optimal edge evaluation policy.
   virtual int GetTruePathIdx(const std::vector<sbpl::Path> &paths);
@@ -145,6 +149,8 @@ class ESPPlanner : public SBPLPlanner {
 
   std::vector<int> goal_wrapper_ids_;
   std::vector<std::set<int>> goal_subsets_;
+  std::vector<sbpl::Path> solution_paths_;
+  long int incumbent_minkey;
 
   // Environment.
   std::unique_ptr<EnvWrapper> environment_wrapper_; 
@@ -161,6 +167,7 @@ class ESPPlanner : public SBPLPlanner {
   // meta-A* variables
   std::vector<int> queue_expands;
   std::vector<int> queue_best_h_dts;
+  std::vector<int> queue_stuck_in_minima;
   std::vector<CHeap> queue_best_h_meta_heaps;
   int max_edge_cost;
   std::vector<int> max_heur_dec;
@@ -176,13 +183,15 @@ class ESPPlanner : public SBPLPlanner {
   double eps;
   double eps_satisfied;
   int search_expands;
-  clock_t TimeStarted;
+  high_res_clock::time_point TimeStarted;
+  high_res_clock::time_point TimeLastSolutionFound;
   short unsigned int search_iteration;
   short unsigned int replan_number;
   bool use_repair_time;
 
   //stats
   std::vector<PlannerStats> stats;
+  std::vector<PlannerStats> ee_stats;
   unsigned int totalExpands;
   double totalTime;
   double totalPlanTime;
@@ -193,7 +202,7 @@ class ESPPlanner : public SBPLPlanner {
   virtual ESPState *GetState(int q_id, int id);
   virtual BestHState* GetBestHState(int q_id, int id);
   virtual void ExpandState(int q_id, ESPState *parent);
-  void putStateInHeap(int q_id, ESPState *state);
+  bool putStateInHeap(int q_id, ESPState *state);
 
   virtual int ImprovePath();
   void checkHeaps(std::string msg);

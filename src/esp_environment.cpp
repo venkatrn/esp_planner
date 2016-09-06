@@ -26,53 +26,146 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
       *costs = costs_cache_[parent_id];
       *edge_probabilities = probs_cache_[parent_id];
       *edge_eval_times = time_cache_[parent_id];
-      edge_groups->clear();
+      auto it = edge_groups_cache_.find(parent_id);
+
+      if (it != edge_groups_cache_.end()) {
+        *edge_groups = it->second;
+      }
+
       return;
     }
   }
 
   const auto &parent_wrapper = wrapper_state_hasher_.GetState(parent_id);
-  set<int> parent_lazy_edges = parent_wrapper.lazy_edges;
+  const set<int>& parent_lazy_edges = parent_wrapper.lazy_edges;
+  const set<int>& parent_all_stochastic_edges = parent_wrapper.all_stochastic_edges;
   const int orig_parent_id = WrapperToStateID(parent_id);
   vector<int> orig_succ_ids;
   vector<int> orig_costs;
+  vector<double> orig_edge_probabilities;
+  vector<double> orig_edge_eval_times;
+  vector<int> orig_edge_groups;
 
-  environment_esp_->GetSuccs(orig_parent_id, &orig_succ_ids, costs,
-                             edge_probabilities, edge_eval_times, edge_groups);
+  environment_esp_->GetSuccs(orig_parent_id, &orig_succ_ids, &orig_costs,
+                             &orig_edge_probabilities, &orig_edge_eval_times, &orig_edge_groups);
 
-  succ_ids->resize(orig_succ_ids.size());
+  succ_ids->clear();
+  costs->clear();
+  edge_probabilities->clear();
+  edge_eval_times->clear();
+  edge_groups->clear();
+
+  succ_ids->reserve(orig_succ_ids.size());
+  costs->reserve(orig_succ_ids.size());
+  edge_probabilities->reserve(orig_succ_ids.size());
+  edge_eval_times->reserve(orig_succ_ids.size());
+  edge_groups->reserve(orig_succ_ids.size());
 
   for (size_t ii = 0; ii < orig_succ_ids.size(); ++ii) {
+    if (orig_edge_probabilities[ii] < kDblTolerance) {
+      // Skip edges that have zero probability.
+      continue;
+    }
     auto succ_lazy_edges = parent_lazy_edges;
+    auto succ_all_stochastic_edges = parent_all_stochastic_edges;
 
     // TODO: we could hash only stochastic edges. Would need to update
     // ConvertWrapperIDsToSBPLPath accordingly.
-    Edge edge(orig_parent_id, orig_succ_ids[ii], edge_probabilities->at(ii),
-              edge_eval_times->at(ii));
+    Edge edge(orig_parent_id, orig_succ_ids[ii], orig_edge_probabilities[ii],
+              orig_edge_eval_times[ii]);
     const int edge_id = edge_hasher_.GetStateIDForceful(edge);
     // We have a stochastic edge.
     double wrapper_state_log_prob = parent_wrapper.log_prob;
 
-    if (edge_probabilities->at(ii) < 1.0 - kDblTolerance) {
+    if (orig_edge_probabilities[ii] < 1.0 - kDblTolerance) {
+      succ_all_stochastic_edges.insert(edge_id);
+
       // TODO: check self-consistency.
       // TODO: use edge_group info here if available.
-      succ_lazy_edges.insert(edge_id);
-      wrapper_state_log_prob += log(edge_probabilities->at(ii));
+      if (orig_edge_groups.empty()) {
+        succ_lazy_edges.insert(edge_id);
+        wrapper_state_log_prob += log(orig_edge_probabilities[ii]);
+      } else {
+        auto insert_code = succ_lazy_edges.insert(orig_edge_groups[ii]);
+        edge_groups->push_back(orig_edge_groups[ii]);
+
+        // Multiply probability only if this is the first time we pass through
+        // this edge group.
+        if (insert_code.second) {
+          wrapper_state_log_prob += log(orig_edge_probabilities[ii]);
+        }
+      }
+      edge_probabilities->push_back(orig_edge_probabilities[ii]);
     } else {
-      edge_probabilities->at(ii) = 1.0;
+      edge_probabilities->push_back(1.0);
     }
+    edge_eval_times->push_back(orig_edge_eval_times[ii]);
+    costs->push_back(orig_costs[ii]);
+
+    if (edge_groups != nullptr && !edge_groups->empty()) {
+      edge_to_group_id_mapping_[edge] = orig_edge_groups[ii];
+    }
+
 
     const int wrapper_succ_id = GetWrapperStateID(orig_succ_ids[ii],
                                                   wrapper_state_log_prob,
-                                                  succ_lazy_edges);
-    succ_ids->at(ii) = wrapper_succ_id;
+                                                  succ_lazy_edges,
+                                                  succ_all_stochastic_edges);
+    succ_ids->push_back(wrapper_succ_id);
+
+    orig_state_to_wrapper_ids_mapping_[orig_succ_ids[ii]].insert(
+      wrapper_succ_id);
+
+    if (orig_succ_ids[ii] == original_goal_id_) {
+      goal_wrapper_ids_.insert(wrapper_succ_id);
+    }
   }
+
+  // DEBUG
+  // if (succs_cache_.find(parent_id) != succs_cache_.end()) {
+  //   const auto& cached_succ_ids = succs_cache_[parent_id];
+    // printf("Cached succs for %d\n", parent_id);
+    // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
+    //   printf("%d, ", cached_succ_ids[ii]);
+    // }
+    // printf("\n");
+    // printf("Regenerated succs for %d\n", parent_id);
+    // for (int ii = 0; ii < succ_ids->size(); ++ii) {
+    //   printf("%d, ", succ_ids->at(ii));
+    // }
+    // printf("\n");
+
+    // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
+    //     if (cached_succ_ids[ii] != succ_ids->at(ii)) {
+    //       printf("No Match: \n");
+    //       cout << wrapper_state_hasher_.GetState(cached_succ_ids[ii]) << endl;
+    //       cout << wrapper_state_hasher_.GetState(succ_ids->at(ii)) << endl;
+    //       cout << orig_succ_ids[ii] << endl;
+    //       cout << (wrapper_state_hasher_.GetState(cached_succ_ids[ii]) == wrapper_state_hasher_.GetState(succ_ids->at(ii))) << endl;
+    //     }
+    // }
+
+    // const auto& cached_costs = costs_cache_[parent_id];
+    // printf("Cached costs for %d\n", parent_id);
+    // for (int ii = 0; ii < cached_costs.size(); ++ii) {
+    //   printf("%d, ", cached_costs[ii]);
+    // }
+    // printf("\n");
+    // printf("Regenerated costs for %d\n", parent_id);
+    // for (int ii = 0; ii < costs->size(); ++ii) {
+    //   printf("%d, ", costs->at(ii));
+    // }
+    // printf("\n");
+  // }
 
   if (kUseCaching) {
     succs_cache_[parent_id] = *succ_ids;
     costs_cache_[parent_id] = *costs;
     probs_cache_[parent_id] = *edge_probabilities;
     time_cache_[parent_id] = *edge_eval_times;
+    if (edge_groups != nullptr && !edge_groups->empty()) {
+      edge_groups_cache_[parent_id] = *edge_groups;
+    }
   }
 }
 
@@ -98,6 +191,11 @@ double EnvWrapper::GetStateProbability(int state_id) {
   return exp(wrapper_state.log_prob);
 }
 
+double EnvWrapper::GetStateNegLogProbability(int state_id) {
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(state_id);
+  return -wrapper_state.log_prob;
+}
+
 int EnvWrapper::GetStartHeuristic(int state_id) {
   const int orig_id = WrapperToStateID(state_id);
   return environment_esp_->GetStartHeuristic(orig_id);
@@ -108,17 +206,25 @@ void EnvWrapper::EnsureHeuristicsUpdated(bool forward_search) {
 }
 
 vector<int> EnvWrapper::StateToWrapperIDs(int env_state_id) const {
-  const auto &states = wrapper_state_hasher_.GetStateMappings();
+  // const auto &states = wrapper_state_hasher_.GetStateMappings();
+  //
+  // vector<int> wrapper_ids;
+  //
+  // for (const auto &state : states) {
+  //   if (state.first.env_state_id == env_state_id) {
+  //     wrapper_ids.push_back(state.second);
+  //   }
+  // }
+  //
+  // return wrapper_ids;
+  auto mappings_it = orig_state_to_wrapper_ids_mapping_.find(env_state_id);
 
-  vector<int> wrapper_ids;
-
-  for (const auto &state : states) {
-    if (state.first.env_state_id == env_state_id) {
-      wrapper_ids.push_back(state.second);
-    }
+  if (mappings_it == orig_state_to_wrapper_ids_mapping_.end()) {
+    return std::vector<int>();
   }
 
-  return wrapper_ids;
+  return std::vector<int>(mappings_it->second.begin(),
+                          mappings_it->second.end());
 }
 
 int EnvWrapper::WrapperToStateID(int wrapper_id) const {
@@ -135,8 +241,9 @@ int EnvWrapper::WrapperToStateID(int wrapper_id) const {
 }
 
 int EnvWrapper::GetWrapperStateID(int state_id, double prob,
-                                  const std::set<int> &lazy_edges /*= empty set*/) {
-  WrapperState wrapper(state_id, prob, lazy_edges);
+                                  const std::set<int> &lazy_edges,
+                                  const std::set<int> &all_stochastic_edges) {
+  WrapperState wrapper(state_id, prob, lazy_edges, all_stochastic_edges);
   int wrapper_state_id = 0;
 
   if (wrapper_state_hasher_.Exists(wrapper)) {
@@ -151,7 +258,8 @@ int EnvWrapper::GetWrapperStateID(int state_id, double prob,
 }
 
 std::vector<int> EnvWrapper::GetAllGoalWrapperIDs(int goal_wrapper_id) const {
-  return AllEquivalentWrapperIDs(goal_wrapper_id);
+  // return AllEquivalentWrapperIDs(goal_wrapper_id);
+  return std::vector<int>(goal_wrapper_ids_.begin(), goal_wrapper_ids_.end());
 }
 
 std::vector<int> EnvWrapper::AllEquivalentWrapperIDs(int wrapper_state_id)
@@ -180,6 +288,8 @@ std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id) const {
                                          source_wrapper_state.lazy_edges.end(), wrapper_state.lazy_edges.begin(),
                                          wrapper_state.lazy_edges.end());
 
+    // const bool is_subset = IsSubset(source_wrapper_state, wrapper_state);
+
     if (is_subset) {
       subset_wrapper_ids.push_back(state_wrapper_ids[ii]);
     }
@@ -188,22 +298,72 @@ std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id) const {
   return subset_wrapper_ids;
 }
 
-bool EnvWrapper::WrapperContainsOriginalEdge(int wrapper_state_id, const sbpl::Edge& edge) {
-  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
-  const int edge_id = edge_hasher_.GetStateID(edge);
-  return (wrapper_state.lazy_edges.find(edge_id) != wrapper_state.lazy_edges.end());
+bool EnvWrapper::IsSubset(const WrapperState &source_wrapper_state,
+                          const WrapperState &wrapper_state) const {
+
+  if (wrapper_state.lazy_edges.empty() &&
+      source_wrapper_state.lazy_edges.empty()) {
+    return true;
+  }
+
+  if (wrapper_state.lazy_edges.empty() &&
+      !source_wrapper_state.lazy_edges.empty()) {
+    return true;
+  }
+
+  if (!wrapper_state.lazy_edges.empty() &&
+      source_wrapper_state.lazy_edges.empty()) {
+    return false;
+  }
+
+  for (const auto &child_lazy_edge : wrapper_state.lazy_edges) {
+    const auto &child_edge = edge_hasher_.GetState(child_lazy_edge);
+    const std::pair<int, int> child_edge_pair = std::make_pair(child_edge.first,
+                                                               child_edge.second);
+    bool child_contained_in_source = false;
+
+    for (const auto &source_lazy_edge : source_wrapper_state.lazy_edges) {
+      const auto &source_edge = edge_hasher_.GetState(source_lazy_edge);
+      const std::pair<int, int> source_edge_pair = std::make_pair(source_edge.first,
+                                                                  source_edge.second);
+      child_contained_in_source = environment_esp_->EdgesInSameGroup(child_edge_pair,
+                                                                     source_edge_pair);
+
+      if (child_contained_in_source) {
+        break;
+      }
+    }
+
+    if (!child_contained_in_source) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
-bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id, const std::unordered_set<sbpl::Edge>& edges) {
+bool EnvWrapper::WrapperContainsOriginalEdge(int wrapper_state_id,
+                                             const sbpl::Edge &edge) {
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
+  const int edge_id = edge_hasher_.GetStateID(edge);
+  return (wrapper_state.all_stochastic_edges.find(edge_id) !=
+          wrapper_state.all_stochastic_edges.end());
+}
+
+bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id,
+                                            const std::unordered_set<sbpl::Edge> &edges) {
   const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
   bool contains_invalid_edge = false;
-  for (const auto &edge_id : wrapper_state.lazy_edges) {
-    const auto& edge = edge_hasher_.GetState(edge_id);
+
+  for (const auto &edge_id : wrapper_state.all_stochastic_edges) {
+    const auto &edge = edge_hasher_.GetState(edge_id);
+
     if (edges.find(edge) != edges.end()) {
       contains_invalid_edge = true;
       break;
     }
   }
+
   return contains_invalid_edge;
 }
 
@@ -215,13 +375,35 @@ sbpl::Path EnvWrapper::ConvertWrapperIDsPathToSBPLPath(const std::vector<int>
   path.edge_probabilities.resize(num_states - 1);
   path.edge_eval_times.resize(num_states - 1);
 
+  std::unordered_set<int> edge_groups_in_path;
+
   for (size_t ii = 0; ii < num_states - 1; ++ii) {
     int s1_id = WrapperToStateID(wrapper_ids_path[ii]);
     int s2_id = WrapperToStateID(wrapper_ids_path[ii + 1]);
     sbpl::Edge temp_edge(s1_id, s2_id);
     const auto &edge = edge_hasher_.GetState(edge_hasher_.GetStateID(temp_edge));
+    auto it = edge_to_group_id_mapping_.find(edge);
+    const bool using_edge_groups = it != edge_to_group_id_mapping_.end();
+    int edge_group_id = -1;
+    bool group_already_in_path = false;
+
+    if (using_edge_groups) {
+      edge_group_id = it->second;
+      group_already_in_path = edge_groups_in_path.find(edge_group_id) !=
+                              edge_groups_in_path.end();
+    }
+
+    if (group_already_in_path) {
+      path.edge_probabilities[ii] = 1.0;
+    } else {
+      path.edge_probabilities[ii] = edge.probability;
+
+      if (using_edge_groups) {
+        edge_groups_in_path.insert(edge_group_id);
+      }
+    }
+
     path.state_ids[ii] = s1_id;
-    path.edge_probabilities[ii] = edge.probability;
     path.edge_eval_times[ii] = edge.evaluation_time;
   }
 
@@ -239,4 +421,12 @@ std::ostream &operator<< (std::ostream &stream, const WrapperState &state) {
   }
 
   return stream;
+}
+
+void EnvWrapper::SetOriginalGoalID(int original_goal_id) {
+  original_goal_id_ = original_goal_id;
+  const int wrapper_goal_id = GetWrapperStateID(original_goal_id,
+                                                std::numeric_limits<double>::lowest(), std::set<int>(), std::set<int>());
+  goal_wrapper_ids_.insert(wrapper_goal_id);
+  orig_state_to_wrapper_ids_mapping_[original_goal_id_].insert(wrapper_goal_id);
 }

@@ -8,10 +8,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS sbpl sbpl_utils)
+find_package(OpenCV REQUIRED)
 
 ## System dependencies are found with CMake's conventions
 find_package(Boost REQUIRED COMPONENTS system)
-
 
 
 ###################################
@@ -27,7 +27,7 @@ catkin_package(
  INCLUDE_DIRS include
  LIBRARIES esp_planner
  CATKIN_DEPENDS sbpl sbpl_utils 
-#  DEPENDS system_lib
+ DEPENDS OpenCV
 )
 
 ###########
@@ -36,7 +36,7 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories(include ${catkin_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
 add_library(esp_planner
   src/esp_structs.cpp
@@ -45,6 +45,7 @@ add_library(esp_planner
   src/lao_planner.cpp
   src/esp_mha_planner.cpp
   src/esp_environment.cpp
+  src/environments/environment_nav2D.cpp
 )
 target_link_libraries(esp_planner ${catkin_LIBRARIES})
 
@@ -57,4 +58,9 @@ target_link_libraries(esp_planner ${catkin_LIBRARIES})
 add_executable(esp_test src/test_esp.cpp)
 # add_dependencies(esp_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(esp_test
+  esp_planner)
+
+add_executable(2dnav_experiments src/2dnav_experiments.cpp)
+# add_dependencies(esp_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(2dnav_experiments
   esp_planner)

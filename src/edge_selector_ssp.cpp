@@ -267,11 +267,20 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
 
 }
 
-int EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
+double EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
   int lower_bound = 0;
   int upper_bound = 0;
   ComputeBounds(ssp_state, &lower_bound, &upper_bound);
-  return (upper_bound - lower_bound);
+  if (lower_bound < kFloatingPointTolerance && upper_bound < kFloatingPointTolerance) {
+    return 1.0;
+  } else if (upper_bound == std::numeric_limits<double>::max() && lower_bound == std::numeric_limits<double>::max()) {
+    return 1.0;
+  } else if (lower_bound < kFloatingPointTolerance) {
+    return std::numeric_limits<double>::max();
+  } else if (upper_bound == std::numeric_limits<double>::max() || lower_bound == std::numeric_limits<double>::max()) {
+    return std::numeric_limits<double>::max();
+  }
+  return static_cast<double>(upper_bound) / static_cast<double>(lower_bound);
 }
 
 double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
@@ -289,7 +298,7 @@ double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
 
 bool EdgeSelectorSSP::IsGoalState(int state_id) const {
   auto &ssp_state = state_hasher_.GetState(state_id);
-  return (ssp_state.suboptimality_bound == 0);
+  return (ssp_state.suboptimality_bound < 1.0 + kFloatingPointTolerance);
 }
 
 double EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {
