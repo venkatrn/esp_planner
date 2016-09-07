@@ -19,8 +19,7 @@
 using namespace std;
 
 namespace {
-constexpr double kFloatingPointTolerance = 1e-3;
-constexpr double kEdgeEvalTimeMultiplier = 10;
+constexpr double kFloatingPointTolerance = 1e-8;
 }
 
 namespace sbpl {
@@ -111,7 +110,9 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
   }
 
   const int num_edges = edge_hasher_.Size();
-  cout << "Number of stochastic edges across all paths: " << num_edges << endl;
+  if (verbose_) {
+    cout << "Number of stochastic edges across all paths: " << num_edges << endl;
+  }
 
   // Create the path_bit_vectors.
   for (size_t ii = 0; ii < paths.size(); ++ii) {
@@ -128,7 +129,9 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
       path_bit_vector.set(edge_id);
     }
 
-    cout << "Path " << ii << ": " << path_bit_vector << endl;
+    if (verbose_) {
+      cout << "Path " << ii << ": " << path_bit_vector << endl;
+    }
   }
 }
 
@@ -237,12 +240,39 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
                                     int *lower_bound_idx,
                                     int *upper_bound_idx) const {
   *lower_bound = std::numeric_limits<int>::max();
-  *upper_bound = std::numeric_limits<int>::max();
+  *upper_bound = 0;
 
   *lower_bound_idx = -1;
   *upper_bound_idx = -1;
 
-  for (size_t ii = 0; ii < path_bit_vectors_.size(); ++ii) {
+  // Initialize the upper bound to the max cost path (of a possible path--.i.e, not invalid), so we have
+  // something even if all paths are stochastic. The lower bound is
+  // automatically taken care of in the next step.
+  bool atleast_one_possible_path = false;
+  for (size_t ii = 0; ii < paths_.size(); ++ii) {
+    const auto &path_bit_vector = path_bit_vectors_[ii];
+    const int path_status = PathStatus(path_bit_vector, ssp_state);
+    // Skip paths which are invalid.
+    if (path_status == -1) {
+      continue;
+    }
+    const int cost = paths_[ii].cost;
+    if (*upper_bound < cost) {
+      *upper_bound = cost;
+      *upper_bound_idx = static_cast<int>(ii);
+    }
+    atleast_one_possible_path = true;
+  }
+
+  // Special case where there are no possiible paths (all are invalid). Both
+  // bounds are infinite.
+  if (!atleast_one_possible_path) {
+    *upper_bound = std::numeric_limits<int>::max();
+    *lower_bound = *upper_bound;
+    return;
+  }
+
+  for (size_t ii = 0; ii < paths_.size(); ++ii) {
     const auto &path_bit_vector = path_bit_vectors_[ii];
     const int cost = paths_[ii].cost;
     const int path_status = PathStatus(path_bit_vector, ssp_state);
@@ -261,10 +291,6 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
       }
     }
   }
-
-  // There should be at least one deterministic path.
-  assert(*upper_bound != std::numeric_limits<int>::max());
-
 }
 
 double EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
@@ -273,14 +299,13 @@ double EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
   ComputeBounds(ssp_state, &lower_bound, &upper_bound);
   if (lower_bound < kFloatingPointTolerance && upper_bound < kFloatingPointTolerance) {
     return 1.0;
-  } else if (upper_bound == std::numeric_limits<double>::max() && lower_bound == std::numeric_limits<double>::max()) {
-    return 1.0;
   } else if (lower_bound < kFloatingPointTolerance) {
-    return std::numeric_limits<double>::max();
-  } else if (upper_bound == std::numeric_limits<double>::max() || lower_bound == std::numeric_limits<double>::max()) {
-    return std::numeric_limits<double>::max();
+    // TODO: check.
+    return 1.0;
   }
-  return static_cast<double>(upper_bound) / static_cast<double>(lower_bound);
+  const double bound = static_cast<double>(upper_bound) / static_cast<double>(lower_bound);
+  cout << lower_bound << "  " << upper_bound << " " << bound << endl;
+  return bound;
 }
 
 double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
@@ -298,7 +323,12 @@ double EdgeSelectorSSP::ComputeTransitionCost(const SSPState &parent_state,
 
 bool EdgeSelectorSSP::IsGoalState(int state_id) const {
   auto &ssp_state = state_hasher_.GetState(state_id);
-  return (ssp_state.suboptimality_bound < 1.0 + kFloatingPointTolerance);
+  
+  // This is a terminal state if it has a suboptimality bound of 1, or if there
+  // are no more edges to evaluate (in which case also we should have a
+  // suboptimality bound of 1 by design--so it should never really happen).
+
+  return fabs(ssp_state.suboptimality_bound - 1.0) < kFloatingPointTolerance || ssp_state.GetUnevaluatedEdges().empty();
 }
 
 double EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {
@@ -341,7 +371,7 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
                                std::vector<std::vector<double>> *succ_state_probabilities_map,
                                std::vector<int> *action_ids,
                                std::vector<std::vector<double>> *action_costs_map) {
-  auto &parent_state = state_hasher_.GetState(state_id);
+  const auto &parent_state = state_hasher_.GetState(state_id);
   succ_state_ids_map->clear();
   succ_state_probabilities_map->clear();
   action_ids->clear();
@@ -352,6 +382,9 @@ void EdgeSelectorSSP::GetSuccs(int state_id,
   const int num_edges = evaluated_edges.size();
   const int num_unevaluated_edges = num_edges - static_cast<int>
                                     (evaluated_edges.count());
+  if (num_unevaluated_edges == 0 || IsGoalState(state_id)) {
+    return;
+  }
   assert(num_unevaluated_edges >= 0);
 
   action_ids->reserve(num_unevaluated_edges);

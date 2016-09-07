@@ -24,11 +24,6 @@
 
 using high_res_clock = std::chrono::high_resolution_clock;
 
-namespace {
-// Tolerance for comparing double numbers.
-constexpr double kDblTolerance = 1e-4;
-} // namespace
-
 namespace sbpl {
 
 struct PlannerState {
@@ -454,10 +449,9 @@ bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
     for (size_t ii = 0; ii < dfs_traversal.size(); ++ii) {
       PlannerState s = state_hasher_.GetState(dfs_traversal[ii]);
 
-      // Ignore goal states
-      // TODO: Update this. Search ends if state being expanded is a goal state
+      // Ignore goal states since they are absorbing.
       if (abstract_mdp_->IsGoalState(s.state_id)) {
-        //printf("[LAO Planner]: Goal state has been found\n");
+        // printf("[LAO Planner]: Goal state has been found\n");
         // exists_non_terminal_states = false;
         // break;
         continue;
@@ -476,19 +470,27 @@ bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
                                 &succ_state_probabilities_map,
                                 &action_ids, &action_costs_map);
 
+        // This can happen if we have a terminal "non-goal" state, although we
+        // should really require the environment to support a IsTerminalState
+        // method instead of IsGoalState.
+        if (action_ids.empty()) {
+          continue;
+        }
+
         s.action_ids = action_ids;
         s.action_costs_map = action_costs_map;
         s.succ_state_ids_map = succ_state_ids_map;
         s.succ_state_probabilities_map = succ_state_probabilities_map;
         s.expanded = true;
 
-        // printf("Succs:");
+        // printf("Succs:\n");
+        // std::cout << succ_state_ids_map.size() << "     " << action_ids.size() << std::endl;
         // for (int ii = 0; ii < succ_state_ids_map.size(); ++ii)
         // {
-        // printf("Edge: %d", action_ids[ii]);
+        // printf("Edge: %d\n", action_ids[ii]);
         // for (int jj = 0; jj < succ_state_ids_map[ii].size(); ++jj)
         // {
-        // printf("State: %d: %f %f", succ_state_ids_map[ii][jj], succ_state_probabilities_map[ii][jj], action_costs_map[ii][jj]);
+        // printf("State: %d: %f %f\n", succ_state_ids_map[ii][jj], succ_state_probabilities_map[ii][jj], action_costs_map[ii][jj]);
         // }
         // }
 
@@ -531,7 +533,6 @@ bool LAOPlanner<AbstractMDP>::Plan(const LAOPlannerParams &params) {
           best_idx = jj;
         }
       }
-
 
       ++planner_stats_.num_backups;
 

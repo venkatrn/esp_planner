@@ -55,7 +55,7 @@ typedef dynamic_bitset BitVector;
 struct SSPState {
   BitVector valid_bits;
   BitVector invalid_bits;
-  double suboptimality_bound = 0;
+  double suboptimality_bound = 1.0;
   SSPState() = delete;
   explicit SSPState(int num_edges);
   SSPState(const SSPState &other);
@@ -88,6 +88,10 @@ class EdgeSelectorSSP {
   Edge EdgeIDToEdge(int edge_id) const;
   SSPState SSPStateIDToSSPState(int ssp_state_id) const;
   int GetBestValidPathIdx(const SSPState &ssp_state) const;
+  double GetSuboptimalityBound(const SSPState &ssp_state) const;
+  void SetVerbose(bool make_verbose) {
+    verbose_ = make_verbose;
+  }
 
   //  private:
   std::vector<Path> paths_;
@@ -115,9 +119,9 @@ class EdgeSelectorSSP {
                      int *upper_bound) const;
   void ComputeBounds(const SSPState &ssp_state, int *lower_bound,
                      int *upper_bound, int *lower_bound_idx, int *upper_bound_idx) const;
-  double GetSuboptimalityBound(const SSPState &ssp_state) const;
   double ComputeTransitionCost(const SSPState &parent_state,
                                const SSPState &child_state, int edge_id) const;
+  bool verbose_ = false;
 };
 } // namspace sbpl
 

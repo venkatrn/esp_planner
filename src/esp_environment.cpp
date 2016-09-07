@@ -5,7 +5,11 @@ using namespace std;
 namespace {
 // Tolerance for comparing double numbers.
 constexpr double kDblTolerance = 1e-4;
-constexpr bool kUseCaching = false;
+// We will cache successors from the first time so that we get the same set of
+// successors during path reconstruction as well---which might not happen if
+// the environment caches edge evaluations and returns a different successor
+// set at a later time.
+constexpr bool kUseCaching = true;
 } // namespace
 
 EnvWrapper::EnvWrapper(EnvironmentESP *env_esp) {
@@ -37,8 +41,9 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   }
 
   const auto &parent_wrapper = wrapper_state_hasher_.GetState(parent_id);
-  const set<int>& parent_lazy_edges = parent_wrapper.lazy_edges;
-  const set<int>& parent_all_stochastic_edges = parent_wrapper.all_stochastic_edges;
+  const set<int> &parent_lazy_edges = parent_wrapper.lazy_edges;
+  const set<int> &parent_all_stochastic_edges =
+    parent_wrapper.all_stochastic_edges;
   const int orig_parent_id = WrapperToStateID(parent_id);
   vector<int> orig_succ_ids;
   vector<int> orig_costs;
@@ -66,6 +71,7 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
       // Skip edges that have zero probability.
       continue;
     }
+
     auto succ_lazy_edges = parent_lazy_edges;
     auto succ_all_stochastic_edges = parent_all_stochastic_edges;
 
@@ -95,10 +101,12 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
           wrapper_state_log_prob += log(orig_edge_probabilities[ii]);
         }
       }
+
       edge_probabilities->push_back(orig_edge_probabilities[ii]);
     } else {
       edge_probabilities->push_back(1.0);
     }
+
     edge_eval_times->push_back(orig_edge_eval_times[ii]);
     costs->push_back(orig_costs[ii]);
 
@@ -124,38 +132,38 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   // DEBUG
   // if (succs_cache_.find(parent_id) != succs_cache_.end()) {
   //   const auto& cached_succ_ids = succs_cache_[parent_id];
-    // printf("Cached succs for %d\n", parent_id);
-    // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
-    //   printf("%d, ", cached_succ_ids[ii]);
-    // }
-    // printf("\n");
-    // printf("Regenerated succs for %d\n", parent_id);
-    // for (int ii = 0; ii < succ_ids->size(); ++ii) {
-    //   printf("%d, ", succ_ids->at(ii));
-    // }
-    // printf("\n");
+  // printf("Cached succs for %d\n", parent_id);
+  // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
+  //   printf("%d, ", cached_succ_ids[ii]);
+  // }
+  // printf("\n");
+  // printf("Regenerated succs for %d\n", parent_id);
+  // for (int ii = 0; ii < succ_ids->size(); ++ii) {
+  //   printf("%d, ", succ_ids->at(ii));
+  // }
+  // printf("\n");
 
-    // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
-    //     if (cached_succ_ids[ii] != succ_ids->at(ii)) {
-    //       printf("No Match: \n");
-    //       cout << wrapper_state_hasher_.GetState(cached_succ_ids[ii]) << endl;
-    //       cout << wrapper_state_hasher_.GetState(succ_ids->at(ii)) << endl;
-    //       cout << orig_succ_ids[ii] << endl;
-    //       cout << (wrapper_state_hasher_.GetState(cached_succ_ids[ii]) == wrapper_state_hasher_.GetState(succ_ids->at(ii))) << endl;
-    //     }
-    // }
+  // for (int ii = 0; ii < cached_succ_ids.size(); ++ii) {
+  //     if (cached_succ_ids[ii] != succ_ids->at(ii)) {
+  //       printf("No Match: \n");
+  //       cout << wrapper_state_hasher_.GetState(cached_succ_ids[ii]) << endl;
+  //       cout << wrapper_state_hasher_.GetState(succ_ids->at(ii)) << endl;
+  //       cout << orig_succ_ids[ii] << endl;
+  //       cout << (wrapper_state_hasher_.GetState(cached_succ_ids[ii]) == wrapper_state_hasher_.GetState(succ_ids->at(ii))) << endl;
+  //     }
+  // }
 
-    // const auto& cached_costs = costs_cache_[parent_id];
-    // printf("Cached costs for %d\n", parent_id);
-    // for (int ii = 0; ii < cached_costs.size(); ++ii) {
-    //   printf("%d, ", cached_costs[ii]);
-    // }
-    // printf("\n");
-    // printf("Regenerated costs for %d\n", parent_id);
-    // for (int ii = 0; ii < costs->size(); ++ii) {
-    //   printf("%d, ", costs->at(ii));
-    // }
-    // printf("\n");
+  // const auto& cached_costs = costs_cache_[parent_id];
+  // printf("Cached costs for %d\n", parent_id);
+  // for (int ii = 0; ii < cached_costs.size(); ++ii) {
+  //   printf("%d, ", cached_costs[ii]);
+  // }
+  // printf("\n");
+  // printf("Regenerated costs for %d\n", parent_id);
+  // for (int ii = 0; ii < costs->size(); ++ii) {
+  //   printf("%d, ", costs->at(ii));
+  // }
+  // printf("\n");
   // }
 
   if (kUseCaching) {
@@ -163,6 +171,7 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     costs_cache_[parent_id] = *costs;
     probs_cache_[parent_id] = *edge_probabilities;
     time_cache_[parent_id] = *edge_eval_times;
+
     if (edge_groups != nullptr && !edge_groups->empty()) {
       edge_groups_cache_[parent_id] = *edge_groups;
     }
@@ -355,12 +364,31 @@ bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id,
   const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
   bool contains_invalid_edge = false;
 
-  for (const auto &edge_id : wrapper_state.all_stochastic_edges) {
-    const auto &edge = edge_hasher_.GetState(edge_id);
+  std::unordered_set<int> invalid_edge_groups;
 
-    if (edges.find(edge) != edges.end()) {
-      contains_invalid_edge = true;
-      break;
+  for (const auto &invalid_edge : edges) {
+    // TODO: check this exists.
+    invalid_edge_groups.insert(edge_to_group_id_mapping_[invalid_edge]);
+  }
+
+  // Make this clear when defining edge groups.
+  bool using_edge_groups = (invalid_edge_groups.size() > 1);
+
+  if (!using_edge_groups) {
+    for (const auto &edge_id : wrapper_state.all_stochastic_edges) {
+      const auto &edge = edge_hasher_.GetState(edge_id);
+
+      if (edges.find(edge) != edges.end()) {
+        contains_invalid_edge = true;
+        break;
+      }
+    }
+  } else {
+    for (const auto &edge_group_id : wrapper_state.lazy_edges) {
+      if (invalid_edge_groups.find(edge_group_id) != invalid_edge_groups.end()) {
+        contains_invalid_edge = true;
+        break;
+      }
     }
   }
 

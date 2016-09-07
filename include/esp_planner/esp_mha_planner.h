@@ -37,13 +37,28 @@
 #include <sbpl/planners/mha_planner.h>
 #include <queue>
 #include <memory>
+#include <unordered_map>
+#include <set>
 
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 
+#include <boost/functional/hash.hpp>
+
 #include <chrono>
 
 using high_res_clock = std::chrono::high_resolution_clock;
+
+// Need this for the edge_set_heaps_, where indexing for the map is done using
+// the set of lazy edges.
+namespace std {
+template <>
+struct hash<std::set<int>> {
+  std::size_t operator()(const std::set<int>& int_set) const {
+    return boost::hash_value(int_set);
+  }
+};
+} // namespace std
 
 class ESPState: public AbstractSearchState {
  public:
@@ -57,6 +72,11 @@ class ESPState: public AbstractSearchState {
   ESPState *best_parent;
   ESPState *expanded_best_parent;
   bool in_incons;
+};
+
+class EdgeSetState: public AbstractSearchState {
+ public:
+  int id;
 };
 
 class ESPPlanner : public SBPLPlanner {
@@ -115,7 +135,12 @@ class ESPPlanner : public SBPLPlanner {
   virtual void get_search_stats(std::vector<PlannerStats> *s);
   virtual void get_ee_stats(std::vector<PlannerStats> *s);
 
-  // Planner for computing optimal edge evaluation policy.
+  // Planner for computing optimal edge evaluation policy. If partial paths is
+  // true, we won't record any valid paths found as solutions. 
+  virtual int GetTruePathIdx(const std::vector<sbpl::Path> &paths, bool partial_paths);
+  // Overload assuming we are given full paths to goal. This is stateful and
+  // will modify solution_paths_ and ee_stats whenever new paths or better
+  // suboptimality bounds are discovered.
   virtual int GetTruePathIdx(const std::vector<sbpl::Path> &paths);
   // Evaluate all lazy edges in all paths, and return the idx of the best valid
   // path.
@@ -126,11 +151,25 @@ class ESPPlanner : public SBPLPlanner {
   // no valid path was found, otherwise returns the wrapper state ID
   // corresponding to the valid path. Output goal_wrapper_id is the wrapper
   // id/path id that was evaluated to be true, and -1 if none of the paths were valid.
+  // The partial_paths bool serves the same purpose as in GetTruePathIdx.
+  int RunEvaluation(int* goal_wrapper_id, bool partial_paths);
   int RunEvaluation(int* goal_wrapper_id);
+  std::vector<sbpl::Path> GetCurrentSolutionPaths(std::vector<int>* path_ids, bool partial_paths);
   std::vector<sbpl::Path> GetCurrentSolutionPaths(std::vector<int>* path_ids);
+  void AddNewSolution(const sbpl::Path& path);
+
+  // Return the best frontier states for each unique edge_set collection we
+  // have on the complete frontier. E.g., if we have many states in OPEN that
+  // have traversed edge sets a, b, ab, abc, etc, this will return the states
+  // with the lowest f-value for each distinct edge set collection. This is
+  // efficient since we have a separate heap for every distinct collection.
+  std::vector<int> GetBestDistinctFrontierStateIDs();
+
   std::unordered_set<int> evaluated_goal_wrapper_ids_;
   std::unordered_set<sbpl::Edge> invalid_edges_;
+  std::unordered_set<int> invalid_edge_groups_;
   std::unordered_set<sbpl::Edge> valid_edges_;
+  std::unordered_set<int> valid_edge_groups_;
 
  protected:
   //data structures (open and incons lists)
@@ -138,6 +177,11 @@ class ESPPlanner : public SBPLPlanner {
   std::vector<std::vector<ESPState*>> incons;
   std::vector<std::vector<ESPState*>> states;
   std::vector<std::vector<BestHState*>> best_h_states;
+  std::unordered_map<std::set<int>, std::vector<EdgeSetState*>> edge_set_states_;
+
+  // Separate heap for every unique edge set.
+  // NOTE: this won't contain any goal wrapper IDs.
+  std::unordered_map<std::set<int>, CHeap> edge_set_heaps_;
 
   //params
   ReplanParams params;
@@ -160,6 +204,7 @@ class ESPPlanner : public SBPLPlanner {
   int expands;
   double inflation_eps, anchor_eps;
   bool use_anchor;
+  bool doing_optimal_search;
   mha_planner::PlannerType planner_type;
   mha_planner::MetaSearchType meta_search_type;
   mha_planner::MHAType mha_type;
@@ -185,6 +230,9 @@ class ESPPlanner : public SBPLPlanner {
   int search_expands;
   high_res_clock::time_point TimeStarted;
   high_res_clock::time_point TimeLastSolutionFound;
+  high_res_clock::time_point TimeExpandsResumed;
+  double total_expands_time_ = 0.0;
+  double total_eval_time_ = 0.0;
   short unsigned int search_iteration;
   short unsigned int replan_number;
   bool use_repair_time;
@@ -201,6 +249,7 @@ class ESPPlanner : public SBPLPlanner {
 
   virtual ESPState *GetState(int q_id, int id);
   virtual BestHState* GetBestHState(int q_id, int id);
+  virtual EdgeSetState* GetEdgeSetState(ESPState* esp_state);
   virtual void ExpandState(int q_id, ESPState *parent);
   bool putStateInHeap(int q_id, ESPState *state);
 

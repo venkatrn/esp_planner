@@ -1255,7 +1255,7 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     int costmult = EnvNav2DProbCfg.Grid2D[newX][newY];
     double probability = EnvNav2DProbCfg.GridProb2D[newX][newY];
     unsigned char edge_group_id = EnvNav2DProbCfg.GridEdgeGroup2D[newX][newY];
-    double time = kCollisionCheckFakeTime;
+    double time = kCollisionCheckFakeTime * 1e-6;
 
     //for diagonal move, take max over adjacent cells
     //for edge group id, we assume that deterministic cells have the largest ID
@@ -1296,6 +1296,7 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                                                                                       + EnvNav2DProbCfg.dyintersects_[aind][1]]);
     }
 
+
     // Don't do collision checking here. This will be handled by GetTrueCost or
     // EvaluateEdge.
     // if (costmult >= EnvNav2DProbCfg.obsthresh) continue;
@@ -1312,11 +1313,24 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
       OutHashEntry = CreateNewHashEntry(newX, newY);
     }
 
+    // If we have computed the true cost already for this edge group, then lets
+    // just return it.
+    auto it = true_cost_cache_.find(edge_group_id);
+    if (it != true_cost_cache_.end()) {
+      // Don't even return this successor if the edge is invalid.
+      if (!it->second) {
+        continue;
+      }
+      edge_groups->push_back(static_cast<int>(edge_group_id));
+      edge_probabilities->push_back(1.0);
+      costs->push_back(it->second);
+    } else {
+      edge_groups->push_back(static_cast<int>(edge_group_id));
+      edge_probabilities->push_back(probability);
+      costs->push_back(cost);
+    }
     succ_ids->push_back(OutHashEntry->stateID);
-    edge_probabilities->push_back(probability);
     edge_eval_times->push_back(time);
-    edge_groups->push_back(static_cast<int>(edge_group_id));
-    costs->push_back(cost);
   }
 
 #if TIME_DEBUG

@@ -24,7 +24,7 @@ enum PlannerType {
 
 int group_id = 1;
 constexpr double kTimeLimit = 20.0;
-constexpr double kExistenceProbability = 0.2;
+constexpr double kExistenceProbability = 0.5;
 
 vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
                             cv::Mat probabilities, cv::Mat edge_groups, unsigned char obsthresh,
@@ -280,7 +280,7 @@ int main(int argc, char *argv[]) {
                                obsthresh, start_x, start_y, goal_x, goal_y);
 
         // Skip this trial if no solution exists.
-        if (ee_stats.back().cost == INFINITECOST) {
+        if (ee_stats.empty() || ee_stats.back().cost == INFINITECOST) {
           break;
         }
 

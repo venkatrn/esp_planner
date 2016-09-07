@@ -46,7 +46,9 @@ int probability_queue = 0;
 // Should we interleave edge evaluation and lazy path finding, or wait until
 // all paths (upto the shortest deterministic one) are found before beginning
 // to evaluate?
-constexpr bool kInterleavedEvaluation = false;
+constexpr bool kInterleavedEvaluation = true;
+// constexpr int kNumExpandsBeforeEdgeEval = 10000;
+constexpr int kNumExpandsBeforeEdgeEval = 100;
 
 // Should we terminate as soon as the first valid path is found?
 constexpr bool kTerminateOnFirstValidPath = true;
@@ -70,6 +72,7 @@ ESPPlanner::ESPPlanner(EnvironmentESP *environment,
   } else {
     probability_queue = num_heuristics - 1;
   }
+
   bforwardsearch = bSearchForward;
   environment_wrapper_.reset(new EnvWrapper(environment));
   replan_number = 0;
@@ -108,6 +111,7 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
       states[q_id].push_back(NULL);
     }
   }
+
   //if we have never seen this state then create one
   if (states[q_id][id] == NULL) {
     states[q_id][id] = new ESPState();
@@ -115,6 +119,7 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
     states[q_id][id]->replan_number = -1;
     states[q_id][id]->q_id = q_id;
   }
+
   //initialize the state if it hasn't been for this call to replan
   ESPState *s = states[q_id][id];
 
@@ -136,8 +141,9 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
         s->h = environment_wrapper_->GetStartHeuristic(s->id);
       }
     } else {
-      if (!kInterleavedEvaluation && q_id == 1) {
-        const double neg_log_prob = environment_wrapper_->GetStateNegLogProbability(s->id);
+      if (doing_optimal_search && q_id == 1) {
+        const double neg_log_prob = environment_wrapper_->GetStateNegLogProbability(
+                                      s->id);
         const double prob = environment_wrapper_->GetStateProbability(s->id);
         // s->h = static_cast<long int>(INFINITECOST - 100 * neg_log_prob);
         s->h = static_cast<long int>(10000000 * neg_log_prob);
@@ -150,6 +156,29 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
   }
 
   return s;
+}
+
+EdgeSetState *ESPPlanner::GetEdgeSetState(ESPState *esp_state) {
+  auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(
+                         esp_state->id);
+  const int id = esp_state->id;
+  const std::set<int> &lazy_edges = wrapper_state.lazy_edges;
+
+  //if this stateID is out of bounds of our state vector then grow the list
+  if (id >= int(edge_set_states_[lazy_edges].size())) {
+    for (int i = edge_set_states_[lazy_edges].size(); i <= id; i++) {
+      edge_set_states_[lazy_edges].push_back(NULL);
+    }
+  }
+
+  //if we have never seen this state then create one
+  if (edge_set_states_[lazy_edges][id] == NULL) {
+    edge_set_states_[lazy_edges][id] = new EdgeSetState();
+    edge_set_states_[lazy_edges][id]->id = id;
+    edge_set_states_[lazy_edges][id]->heapindex = 0;
+  }
+
+  return edge_set_states_[lazy_edges][id];
 }
 
 BestHState *ESPPlanner::GetBestHState(int q_id, int id) {
@@ -389,17 +418,19 @@ bool ESPPlanner::UpdateGoal(ESPState *state) {
     goal_state->best_parent = state->best_parent;
     goal_updated = true;
 
-    if (kInterleavedEvaluation) {
-      int path_cost = 0;
-      vector<int> wrapper_ids_path = GetSearchPath(state,
-                                                   path_cost);
-      auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
-                             wrapper_ids_path);
-      solution_path.cost = path_cost;
-      solution_paths_.push_back(solution_path);
-    }
+    // if (kInterleavedEvaluation) {
+    //   int path_cost = 0;
+    //   vector<int> wrapper_ids_path = GetSearchPath(state,
+    //                                                path_cost);
+    //   auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
+    //                          wrapper_ids_path);
+    //   solution_path.cost = path_cost;
+    //   solution_paths_.push_back(solution_path);
+    // }
+    // } else if (wrapper_state.env_state_id == goal_state_id &&
+    //            kInterleavedEvaluation) {
   } else if (wrapper_state.env_state_id == goal_state_id &&
-             kInterleavedEvaluation) {
+             false) {
     goal_wrapper_ids_.push_back(state->id);
     goal_subsets_.push_back(wrapper_state.lazy_edges);
 
@@ -490,13 +521,16 @@ bool ESPPlanner::putStateInHeap(int q_id, ESPState *state) {
       if (q_id == 0) {
         key.key[0] = long(state->g + state->h);
       } else {
-        if (!kInterleavedEvaluation && q_id == 1) {
+        if (doing_optimal_search && q_id == 1) {
           key.key[0] = long(state->h);
-          key.key[1] = long(state->g + inflation_eps * environment_wrapper_->GetGoalHeuristic(
+          key.key[1] = long(state->g + inflation_eps *
+                            environment_wrapper_->GetGoalHeuristic(
                               state->id));
         }
+
         key.key[0] = long(state->h);
-        key.key[1] = long(state->g + inflation_eps * environment_wrapper_->GetGoalHeuristic(
+        key.key[1] = long(state->g + inflation_eps *
+                          environment_wrapper_->GetGoalHeuristic(
                             state->id));
       }
 
@@ -515,6 +549,20 @@ bool ESPPlanner::putStateInHeap(int q_id, ESPState *state) {
       heaps[q_id].updateheap(state, key);
     } else { //otherwise add it to the heap
       heaps[q_id].insertheap(state, key);
+    }
+
+    auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(
+                           state->id);
+    auto wrapper_heap_state = GetEdgeSetState(state);
+
+    if (edge_set_heaps_[wrapper_state.lazy_edges].currentsize == 0) {
+      edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
+    }
+
+    if (wrapper_heap_state->heapindex != 0) {
+      edge_set_heaps_[wrapper_state.lazy_edges].updateheap(wrapper_heap_state, key);
+    } else { //otherwise add it to the heap
+      edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
     }
   }
   //if the state has already been expanded once for this iteration
@@ -652,7 +700,7 @@ int ESPPlanner::ImprovePath() {
 
         printf("Anchor state ID:%d   G:%d    H:%d\n", anchor_state->id,
                anchor_state->g, anchor_state->h);
-        printf("Anchors aweigh! chosen queue (%d) has f-val %d, anchor-h %d, minkey %ld, and anchor has min key %ld\n",
+        printf("Anchors aweigh! chosen queue (%d) has f-val %d, anchor-h %ld, minkey %ld, and anchor has min key %ld\n",
                q_id, anchor_state->g + anchor_state->h,
                (long int)(inflation_eps * anchor_state->h), best_q_min_key.key[0],
                anchor_val);
@@ -707,7 +755,7 @@ int ESPPlanner::ImprovePath() {
       if (mha_lite_anchor) {
         printf("Anchor state ID:%d   G:%d    H:%d\n", anchor_state->id,
                anchor_state->g, anchor_state->h);
-        printf("Anchors aweigh! chosen queue (%d) has f-val %ld, anchor-h %ld, minkey %ld, and anchor has min key %ld\n",
+        printf("Anchors aweigh! chosen queue (%d) has f-val %d, anchor-h %ld, minkey %ld, and anchor has min key %ld\n",
                q_id, anchor_state->g + anchor_state->h,
                (long int)(anchor_state->h), best_q_min_key.key[0],
                anchor_val);
@@ -752,6 +800,7 @@ int ESPPlanner::ImprovePath() {
             best_key = key;
           }
         }
+
         anchor_state = GetState(0, state->id);
         // printf("Chosen state %d, with      f: %d,      heur: %d,     prob: %f\n", state->id, anchor_state->g + anchor_state->h, state->h, environment_wrapper_->GetStateNegLogProbability(state->id));
       }
@@ -804,6 +853,11 @@ int ESPPlanner::ImprovePath() {
     } else {
       heaps[q_id].deleteheap(state);
     }
+
+    const auto &wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(state->id);
+    auto edge_set_state = GetEdgeSetState(state);
+    edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
 
     // delete from the other queues as well if SMHA.
     if (planner_type == mha_planner::PlannerType::SMHA) {
@@ -867,10 +921,6 @@ int ESPPlanner::ImprovePath() {
     //expand the state
     expands++;
 
-
-    const auto &wrapper_state =
-      environment_wrapper_->wrapper_state_hasher_.GetState(state->id);
-
     if (wrapper_state.env_state_id == goal_state_id) {
       // goal_wrapper_ids_.push_back(state->id);
       // goal_subsets_.push_back(wrapper_state.lazy_edges);
@@ -914,6 +964,23 @@ int ESPPlanner::ImprovePath() {
       if (!is_subset && is_feasible) {
         ExpandState(q_id, state);
       }
+    }
+
+    // if (kInterleavedEvaluation && expands % kNumExpandsBeforeEdgeEval == 0) {
+    high_res_clock::time_point TimeNow = high_res_clock::now();
+    auto elapsed_seconds =
+      std::chrono::duration_cast<std::chrono::duration<double>>
+      (TimeNow - TimeExpandsResumed);
+    total_expands_time_ += elapsed_seconds.count();
+    cout << total_expands_time_ << "   " << total_eval_time_ << endl;
+    if (kInterleavedEvaluation && total_expands_time_ > total_eval_time_) {
+      int best_wrapper_id;
+      int valid_path_idx = RunEvaluation(&best_wrapper_id, true);
+      TimeExpandsResumed = high_res_clock::now();
+      elapsed_seconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>
+        (TimeExpandsResumed - TimeNow);
+      total_eval_time_ += elapsed_seconds.count();
     }
 
     if (expands % 100000 == 0) {
@@ -1124,44 +1191,74 @@ vector<int> ESPPlanner::GetSearchPath(ESPState *end_state, int &solcost) {
 }
 
 int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
+  return GetTruePathIdx(paths, false);
+}
+
+int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
+                               bool partial_paths) {
   // GetTruePathIdxAllEdges(paths);
   using namespace sbpl;
-
-
 
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
   ssp->SetPaths(paths);
 
   const int num_edges = ssp->NumStochasticEdges();
   SSPState start_state(num_edges);
+
+  const auto &edge_group_map = environment_wrapper_->edge_to_group_id_mapping_;
+
+  // Update the state based on prior edge evaluations if we are using the
+  // interleaved evaluation strategy.
+  if (partial_paths) {
+    for (int edge_id = 0; edge_id < num_edges; ++edge_id) {
+      const Edge &edge_to_evaluate = ssp->EdgeIDToEdge(edge_id);
+      auto edge_group_it = edge_group_map.find(edge_to_evaluate);
+      int status = 0;
+
+      if (invalid_edges_.find(edge_to_evaluate) != invalid_edges_.end() ||
+          (edge_group_it != edge_group_map.end() &&
+           invalid_edge_groups_.count(edge_group_it->second) != 0)) {
+        status = -1;
+      } else if (valid_edges_.find(edge_to_evaluate) != valid_edges_.end() ||
+                 (edge_group_it != edge_group_map.end() &&
+                  valid_edge_groups_.count(edge_group_it->second) != 0)) {
+        status = 1;
+      }
+
+      if (status == 1) {
+        start_state.valid_bits.set(edge_id, true);
+        valid_edges_.insert(edge_to_evaluate);
+
+        if (edge_group_it != edge_group_map.end()) {
+          valid_edge_groups_.insert(edge_group_it->second);
+        }
+      } else if (status == -1) {
+        start_state.invalid_bits.set(edge_id, true);
+        invalid_edges_.insert(edge_to_evaluate);
+
+        if (edge_group_it != edge_group_map.end()) {
+          invalid_edge_groups_.insert(edge_group_it->second);
+        }
+      }
+    }
+  }
+
   start_state.suboptimality_bound = ssp->GetSuboptimalityBound(start_state);
   int start_id = ssp->state_hasher_.GetStateIDForceful(start_state);
   int best_valid_path_idx = ssp->GetBestValidPathIdx(start_state);
 
-  if (!kInterleavedEvaluation) {
-    high_res_clock::time_point TimeNow = high_res_clock::now();
-    auto elapsed_seconds =
-      std::chrono::duration_cast<std::chrono::duration<double>>
-      (TimeNow - TimeLastSolutionFound);
-    double delta_time = elapsed_seconds.count();
-
-    ::PlannerStats tempStat;
-    tempStat.eps = inflation_eps;
-    tempStat.expands = 0;
-    tempStat.time = delta_time;
-    // tempStat.cost = static_cast<int>(100.0 * start_state.suboptimality_bound);
+  if (!partial_paths) {
     if (best_valid_path_idx != -1) {
-      tempStat.cost = paths[best_valid_path_idx].cost;
+      AddNewSolution(paths[best_valid_path_idx]);
     } else {
-      tempStat.cost = INFINITECOST;
+      auto dummy_path = sbpl::Path();
+      dummy_path.cost = INFINITECOST;
+      AddNewSolution(dummy_path);
     }
-    ee_stats.push_back(tempStat);
-
-    TimeLastSolutionFound = high_res_clock::now();
   }
 
   if (paths.empty()) {
-    printf("WARNING: There are no paths to goal!\n");
+    printf("WARNING: There are no paths provided to the edge evaluator!\n");
     return -1;
   }
 
@@ -1187,7 +1284,8 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
   double old_bound = start_state.suboptimality_bound;
   high_res_clock::time_point before_time = high_res_clock::now();
 
-  while (ssp->GetSuboptimalityBound(current_state) > kBoundForTermination) {
+  while (ssp->GetSuboptimalityBound(current_state) > kBoundForTermination &&
+        ssp->GetSuboptimalityBound(current_state) < std::numeric_limits<double>::max()) {
     // Best action to execute.
     const int current_state_id = ssp->state_hasher_.GetStateID(current_state);
 
@@ -1212,15 +1310,26 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
     const Edge &edge_to_evaluate = ssp->EdgeIDToEdge(edge_id);
     printf("Evaluating edge %d:  (%d  %d) \n", edge_id, edge_to_evaluate.first,
            edge_to_evaluate.second);
+    int edge_group;
     bool valid = environment_wrapper_->EvaluateOriginalEdge(edge_to_evaluate.first,
                                                             edge_to_evaluate.second);
+    const auto edge_group_it = edge_group_map.find(edge_to_evaluate);
 
     if (valid) {
       current_state.valid_bits.set(edge_id, true);
       valid_edges_.insert(edge_to_evaluate);
+
+      if (edge_group_it != edge_group_map.end()) {
+        valid_edge_groups_.insert(edge_group_it->second);
+      }
     } else {
       current_state.invalid_bits.set(edge_id, true);
       invalid_edges_.insert(edge_to_evaluate);
+
+      if (edge_group_it != edge_group_map.end()) {
+        invalid_edge_groups_.insert(edge_group_it->second);
+      }
+
       printf("Edge failed %d:  (%d  %d) \n", edge_id, edge_to_evaluate.first,
              edge_to_evaluate.second);
     }
@@ -1231,26 +1340,19 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths) {
     double bound = ssp->GetSuboptimalityBound(current_state);
     cout << "Current bound " << bound << endl;
 
-    if (fabs(bound - old_bound) > 1e-3) {
-      high_res_clock::time_point TimeNow = high_res_clock::now();
-      auto elapsed_seconds =
-        std::chrono::duration_cast<std::chrono::duration<double>>
-        (TimeNow - TimeLastSolutionFound);
-      double delta_time = elapsed_seconds.count();
-
-      ::PlannerStats tempStat;
-      tempStat.eps = inflation_eps;
-      tempStat.expands = 0;
-      tempStat.time = delta_time;
-      // tempStat.cost = static_cast<int>(100.0 * bound);
+    // If we have a change in suboptimality bound, make a note of it. Its
+    // possible the path did not change though from the previous path, and
+    // consequently the actual solution cost could be the same.
+    // Of course, if these are only partial paths, then we won't record
+    // anything.
+    if (!partial_paths && fabs(bound - old_bound) > 1e-3) {
       if (best_valid_path_idx != -1) {
-        tempStat.cost = paths[best_valid_path_idx].cost;
+        AddNewSolution(paths[best_valid_path_idx]);
       } else {
-        tempStat.cost = INFINITECOST;
+        auto dummy_path = sbpl::Path();
+        dummy_path.cost = INFINITECOST;
+        AddNewSolution(dummy_path);
       }
-      ee_stats.push_back(tempStat);
-
-      TimeLastSolutionFound = high_res_clock::now();
     }
 
     old_best_valid_path_idx = best_valid_path_idx;
@@ -1307,22 +1409,58 @@ int ESPPlanner::GetTruePathIdxAllEdges(const std::vector<sbpl::Path> &paths) {
   return best_valid_path_idx;
 }
 
-int ESPPlanner::RunEvaluation(int *valid_goal_wrapper_id) {
+void ESPPlanner::AddNewSolution(const sbpl::Path &path) {
+  high_res_clock::time_point TimeNow = high_res_clock::now();
+  auto elapsed_seconds =
+    std::chrono::duration_cast<std::chrono::duration<double>>
+    (TimeNow - TimeLastSolutionFound);
+
+  ::PlannerStats new_stat;
+  new_stat.eps = inflation_eps;
+  new_stat.expands = 0;
+  new_stat.time = elapsed_seconds.count();
+  new_stat.cost = path.cost;
+
+  if (path.cost != INFINITECOST) {
+    solution_paths_.push_back(path);
+  }
+
+  ee_stats.push_back(new_stat);
+
+  TimeLastSolutionFound = high_res_clock::now();
+}
+
+int ESPPlanner::RunEvaluation(int *best_wrapper_id) {
+  return RunEvaluation(best_wrapper_id, false);
+}
+
+int ESPPlanner::RunEvaluation(int *valid_goal_wrapper_id, bool partial_paths) {
   *valid_goal_wrapper_id = -1;
   vector<int> path_ids;
-  auto possible_paths = GetCurrentSolutionPaths(&path_ids);
-  int valid_path_idx = GetTruePathIdx(possible_paths) ;
+
+  auto possible_paths = GetCurrentSolutionPaths(&path_ids, partial_paths);
+
+  if (possible_paths.empty()) {
+    return -1;
+  }
+
+  int valid_path_idx = GetTruePathIdx(possible_paths, partial_paths) ;
   // Mark these paths/goals as evaluated, so that they are not considered again in
   // the future.
+  // TODO: change name.
   evaluated_goal_wrapper_ids_.insert(path_ids.begin(), path_ids.end());
 
   if (valid_path_idx != -1) {
     int goal_wrapper_id = path_ids[valid_path_idx];
-    printf("A feasible solution (%d) has been found!!\n", goal_wrapper_id);
+
+    if (!partial_paths) {
+      printf("A feasible solution (%d) has been found!!\n", goal_wrapper_id);
+    }
+
     // Exclude the valid path ID so that it can be obtained later.
     // evaluated_goal_wrapper_ids_.erase(goal_wrapper_id);
     *valid_goal_wrapper_id = goal_wrapper_id;
-    solution_paths_.push_back(possible_paths[valid_path_idx]);
+    // solution_paths_.push_back(possible_paths[valid_path_idx]);
   }
 
   return valid_path_idx;
@@ -1383,6 +1521,7 @@ void ESPPlanner::initializeSearch() {
   //set MHA parameters
   inflation_eps = params.initial_eps;
   anchor_eps = params.initial_eps;
+  doing_optimal_search = fabs(inflation_eps - params.initial_eps) < 1e-8;
   // planner_type = params.planner_type;
   // meta_search_type = params.meta_search_type;
   // mha_type = params.mha_type;
@@ -1456,6 +1595,16 @@ void ESPPlanner::initializeSearch() {
     key.key[0] = start_state->h;
     heaps[ii].insertheap(start_state, key);
 
+    const auto &wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(start_state->id);
+
+    if (edge_set_heaps_[wrapper_state.lazy_edges].currentsize == 0) {
+      edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
+    }
+
+    auto wrapper_heap_state = GetEdgeSetState(start_state);
+    edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
+
     queue_best_h_dts[ii] = start_state->h;
 
     if (meta_search_type == MetaSearchType::META_A_STAR) {
@@ -1475,6 +1624,7 @@ void ESPPlanner::initializeSearch() {
 bool ESPPlanner::Search(vector<int> &pathIds, int &PathCost) {
   CKey key;
   TimeStarted = high_res_clock::now();
+  TimeExpandsResumed = high_res_clock::now();
   TimeLastSolutionFound = high_res_clock::now();
 
   initializeSearch();
@@ -1493,12 +1643,9 @@ bool ESPPlanner::Search(vector<int> &pathIds, int &PathCost) {
 
     if (ret == 1) { //solution found for this iteration
       eps_satisfied = inflation_eps;
-    }
-
-    if (!kInterleavedEvaluation) {
       int valid_goal_wrapper_id;
       int valid_path_idx = -1;
-      valid_path_idx = RunEvaluation(&valid_goal_wrapper_id);
+      valid_path_idx = RunEvaluation(&valid_goal_wrapper_id, false);
     }
 
     int delta_expands = search_expands - before_expands;
@@ -1601,7 +1748,7 @@ int ESPPlanner::GetBestHeuristicID() {
   //   return probability_queue;
   // }
   // return 1;
-  
+
 
   // Note: Anchor is skipped for original MHA, but not for lite
   int starting_ind;
@@ -1869,7 +2016,7 @@ int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
 int ESPPlanner::set_goal(int id) {
   const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id,
                                                                       std::numeric_limits<double>::lowest(),
-        std::set<int>(), std::set<int>());
+                                                                      std::set<int>(), std::set<int>());
   environment_wrapper_->SetOriginalGoalID(id);
   printf("planner: setting env goal to %d and wrapper goal to %d\n", id,
          wrapper_goal_id);
@@ -1884,66 +2031,106 @@ int ESPPlanner::set_goal(int id) {
 }
 
 int ESPPlanner::set_start(int id) {
-  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 0.0, std::set<int>(), std::set<int>());
+  const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 0.0,
+                                                                       std::set<int>(), std::set<int>());
   printf("planner: setting env start to %d and wrapper start to %d\n", id,
          wrapper_start_id);
 
   if (bforwardsearch) {
     start_state_id = wrapper_start_id;
-  } else {
-    goal_state_id = wrapper_start_id;
+
+} else {
+  goal_state_id = wrapper_start_id;
   }
 
   return 1;
 }
 
-vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
-  path_ids->clear();
-  // Get all paths.
-  vector<sbpl::Path> solution_paths;
-  // vector<int> all_goal_wrapper_ids = environment_wrapper_->GetAllGoalWrapperIDs(
-  //                                      goal_state_id);
-  vector<int> all_goal_wrapper_ids = goal_wrapper_ids_;
-  printf("Sol paths: %zu\n", all_goal_wrapper_ids.size());
-  solution_paths.reserve(all_goal_wrapper_ids.size());
-  path_ids->reserve(all_goal_wrapper_ids.size());
+std::vector<int> ESPPlanner::GetBestDistinctFrontierStateIDs() {
+  vector<int> best_wrapper_ids;
+  best_wrapper_ids.reserve(edge_set_heaps_.size());
 
-  for (size_t ii = 0; ii < all_goal_wrapper_ids.size(); ++ii) {
-    // Skip any wrapper goal states that have already been evaluated (either as
-    // valid or invalid).
-    if (evaluated_goal_wrapper_ids_.find(all_goal_wrapper_ids[ii]) !=
-        evaluated_goal_wrapper_ids_.end()) {
-      printf("Skipping %d because already evaluated\n", all_goal_wrapper_ids[ii]);
+  // cout << "Best wrappers: " << endl;
+  vector<std::set<int>> keys_to_erase;
+  for (auto &map_element : edge_set_heaps_) {
+    // Skip heaps which are now empty.
+    if (map_element.second.currentsize == 0) {
       continue;
     }
 
-    // Ignore a path to goal if it has not been marked as expanded.
+    const auto best_state = (EdgeSetState *)map_element.second.getminheap();
+
+    if (environment_wrapper_->WrapperContainsInvalidEdge(best_state->id,
+                                                         invalid_edges_)) {
+      // TODO: also delete this heap from edge_set_heaps_ since its invalid.
+      continue;
+    }
+
+    best_wrapper_ids.push_back(best_state->id);
+    const auto &wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(best_state->id);
+    // cout <<  wrapper_state << endl;
+  }
+
+  return best_wrapper_ids;
+}
+
+vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
+  return GetCurrentSolutionPaths(path_ids, false);
+}
+
+vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids,
+                                                       bool partial_paths) {
+  path_ids->clear();
+  // Get all paths.
+  vector<sbpl::Path> paths_to_evaluate;
+  // vector<int> all_goal_wrapper_ids = environment_wrapper_->GetAllGoalWrapperIDs(
+  //                                      goal_state_id);
+  vector<int> wrapper_ids_to_evaluate;
+
+  if (!partial_paths) {
+    wrapper_ids_to_evaluate = goal_wrapper_ids_;
+  } else {
+    wrapper_ids_to_evaluate = GetBestDistinctFrontierStateIDs();
+  }
+
+  paths_to_evaluate.reserve(wrapper_ids_to_evaluate.size());
+  path_ids->reserve(wrapper_ids_to_evaluate.size());
+
+  for (size_t ii = 0; ii < wrapper_ids_to_evaluate.size(); ++ii) {
+    // Skip any wrapper goal states that have already been evaluated (either as
+    // valid or invalid).
+    if (evaluated_goal_wrapper_ids_.find(wrapper_ids_to_evaluate[ii]) !=
+        evaluated_goal_wrapper_ids_.end()) {
+      // printf("Skipping %d because already evaluated\n", wrapper_ids_to_evaluate[ii]);
+      continue;
+    }
 
     // Find the queue from which it was expanded.
     ESPState *search_state;
 
-    if (all_goal_wrapper_ids[ii] == goal_state->id) {
+    if (wrapper_ids_to_evaluate[ii] == goal_state->id) {
       search_state = goal_state;
+
       if (goal_state->best_parent == NULL || goal_state->g == INFINITECOST) {
         continue;
       }
     } else {
       for (size_t jj = 0; jj < num_heuristics; ++jj) {
-        search_state = GetState(jj, all_goal_wrapper_ids[ii]);
+        search_state = GetState(jj, wrapper_ids_to_evaluate[ii]);
+        bool cost_check_succeeded = true;
 
-        if (search_state->best_parent != NULL && search_state->g <= (long int) (inflation_eps * incumbent_minkey)){
+        if (!partial_paths) {
+          cost_check_succeeded = (search_state->g <= (long int) (inflation_eps *
+                                                                incumbent_minkey) 
+                                   && incumbent_minkey != INFINITECOST);
+        }
+
+        if (search_state->best_parent != NULL && cost_check_succeeded) {
           break;
         }
       }
     }
-
-
-    // //  Skip any wrapper goal states whose costs exceed the current bound.
-    // if (search_state->g > (long int)(inflation_eps * incumbent_minkey)) {
-    //   // printf("Skipping path because g-val for %d is greater than bound %d\n",
-    //   //        all_goal_wrapper_ids[ii], int(inflation_eps * incumbent_minkey));
-    //   continue;
-    // }
 
     int path_cost = 0;
     vector<int> wrapper_ids_path = GetSearchPath(search_state,
@@ -1951,16 +2138,15 @@ vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
     auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
                            wrapper_ids_path);
     solution_path.cost = path_cost;
-    solution_paths.push_back(solution_path);
-    path_ids->push_back(all_goal_wrapper_ids[ii]);
+    paths_to_evaluate.push_back(solution_path);
+    path_ids->push_back(wrapper_ids_to_evaluate[ii]);
   }
 
-  return solution_paths;
+  printf("Num paths to evaluate: %zu\n", paths_to_evaluate.size());
+  return paths_to_evaluate;
 }
 
-
 //---------------------------------------------------------------------------------------------------------
-
 
 void ESPPlanner::get_search_stats(vector<PlannerStats> *s) {
   s->clear();
