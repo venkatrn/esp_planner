@@ -157,11 +157,12 @@ ESPState *ESPPlanner::GetState(int q_id, int id) {
 
   return s;
 }
-
 EdgeSetState *ESPPlanner::GetEdgeSetState(ESPState *esp_state) {
-  auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(
-                         esp_state->id);
-  const int id = esp_state->id;
+  return GetEdgeSetState(esp_state->id);
+}
+
+EdgeSetState *ESPPlanner::GetEdgeSetState(int id) {
+  auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(id);
   const std::set<int> &lazy_edges = wrapper_state.lazy_edges;
 
   //if this stateID is out of bounds of our state vector then grow the list
@@ -229,7 +230,7 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
   for (int i = 0; i < (int)children.size(); i++) {
     // printf("  succ %d\n",children[i]);
     vector<int> equiv_wrapper_ids = environment_wrapper_->AllSubsetWrapperIDs(
-                                      children[i]);
+                                      children[i], valid_edge_groups_);
     bool prune = false;
 
     for (const int equiv_wrapper_id : equiv_wrapper_ids) {
@@ -240,9 +241,11 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
           continue;
         }
 
-        ESPState *child = GetState(k, equiv_wrapper_id);
+        ESPState *subset_state = GetState(k, equiv_wrapper_id);
 
-        if (child->iteration_closed == search_iteration) {
+        // For interleaved evaluation, we need to check the g-values.
+        // if (subset_state->iteration_closed == search_iteration) {
+        if (subset_state->g <= parent->v + costs[i]) {
           prune = true;
           break;
         }
@@ -252,6 +255,12 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
         break;
       }
     }
+
+    // Inadmissible pruning.
+    // const bool is_original_goal = environment_wrapper_->WrapperToStateID(children[i]) == orig_goal_state_id;
+    // if (environment_wrapper_->AllEquivalentWrapperIDs(children[i]).size() != 1 &&  !is_original_goal) {
+    //   prune = true;
+    // }
 
     if (prune) {
       continue;
@@ -1178,12 +1187,69 @@ vector<int> ESPPlanner::GetSearchPath(ESPState *end_state, int &solcost) {
   return wholePathIds;
 }
 
+vector<int> ESPPlanner::GetSearchPathUnsafe(ESPState *end_state, int &solcost) {
+  vector<int> SuccIDV;
+  vector<int> CostV;
+  vector<int> wholePathIds;
+  vector<double> ProbV;
+  vector<double> TimesV;
+  vector<int> EdgeGroupsV;
+
+  ESPState *state;
+  ESPState *final_state;
+
+  if (bforwardsearch) {
+    state = end_state;
+    final_state = start_state;
+  } else {
+    state = start_state;
+    final_state = end_state;
+  }
+
+  wholePathIds.push_back(state->id);
+  solcost = state->g;
+
+  while (state->id != final_state->id) {
+    // if (state->expanded_best_parent == NULL) {
+    // Since we also need paths to states which have not yet been
+    // "expanded".
+    if (state->best_parent == NULL) {
+      printf("a state (%d) along the path has no parent!\n", state->id);
+      break;
+    }
+
+    // if (state->v == INFINITECOST) {
+    if (state->g == INFINITECOST) {
+      printf("a state along the path has an infinite g-value!\n");
+      printf("inf state = %d\n", state->id);
+      break;
+    }
+
+    // state = state->expanded_best_parent;
+    state = state->best_parent;
+    wholePathIds.push_back(state->id);
+  }
+
+  //if we searched forward then the path reconstruction
+  //worked backward from the final state, so we have to reverse the path
+  //in place reverse
+  for (unsigned int i = 0; i < wholePathIds.size() / 2; i++) {
+    int other_idx = wholePathIds.size() - i - 1;
+    int temp = wholePathIds[i];
+    wholePathIds[i] = wholePathIds[other_idx];
+    wholePathIds[other_idx] = temp;
+  }
+
+  return wholePathIds;
+}
+
 void ESPPlanner::EdgeEvaluationCB() {
   auto elapsed_seconds =
     std::chrono::duration_cast<std::chrono::duration<double>>
     (high_res_clock::now() - TimeExpandsResumed);
   total_expands_time_ += elapsed_seconds.count();
-  int num_new_paths = static_cast<int>(goal_wrapper_ids_.size());
+  int num_new_paths = static_cast<int>(goal_wrapper_ids_.size()) -
+                      num_paths_discovered_;
 
   // cout << total_expands_time_ << "   " << total_eval_time_ << endl;
 
@@ -1197,7 +1263,7 @@ void ESPPlanner::EdgeEvaluationCB() {
   }
 
   case EvaluationStrategy::AFTER_N_EXPANDS: {
-    evaluate_now = (expands % kNumExpandsBeforeEdgeEval) == 0;
+    evaluate_now = (expands % edge_evaluation_params_.after_n_expands) == 0;
     break;
   }
 
@@ -1273,18 +1339,8 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
 
       if (status == 1) {
         start_state.valid_bits.set(edge_id, true);
-        valid_edges_.insert(edge_to_evaluate);
-
-        if (edge_group_it != edge_group_map.end()) {
-          valid_edge_groups_.insert(edge_group_it->second);
-        }
       } else if (status == -1) {
         start_state.invalid_bits.set(edge_id, true);
-        invalid_edges_.insert(edge_to_evaluate);
-
-        if (edge_group_it != edge_group_map.end()) {
-          invalid_edge_groups_.insert(edge_group_it->second);
-        }
       }
     }
   }
@@ -1405,6 +1461,9 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
       if (edge_group_it != edge_group_map.end()) {
         edge_group = edge_group_it->second;
         valid_edge_groups_.insert(edge_group_it->second);
+        evaluated_edge_groups_.insert(edge_group_it->second);
+        // This needs more work.
+        // UpdateStatesWithValidEdgeGroup(edge_group);
       }
 
       // printf("Edge succeeded %d:  (%d  %d) \n", edge_group, edge_to_evaluate.first,
@@ -1416,6 +1475,8 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
       if (edge_group_it != edge_group_map.end()) {
         edge_group = edge_group_it->second;
         invalid_edge_groups_.insert(edge_group_it->second);
+        evaluated_edge_groups_.insert(edge_group_it->second);
+        PruneStatesWithInvalidEdgeGroup(edge_group);
       }
 
       // printf("Edge failed %d:  (%d  %d) \n", edge_group, edge_to_evaluate.first,
@@ -2126,6 +2187,88 @@ std::vector<int> ESPPlanner::GetBestDistinctFrontierStateIDs() {
   return best_wrapper_ids;
 }
 
+void ESPPlanner::PruneStatesWithInvalidEdgeGroup(int edge_group_id) {
+  for (int kk = 1; kk <= heaps[0].currentsize; ++kk) {
+    ESPState *sa = (ESPState *)heaps[0].heap[kk].heapstate;
+
+    if (environment_wrapper_->WrapperContainsEdgeGroup(sa->id, edge_group_id)) {
+      // First delete from anchor.
+      heaps[0].deleteheap(sa);
+
+      // Then delete from all other heuristic queues if they are in the heap.
+      for (int q_id = 1; q_id < num_heuristics; ++q_id) {
+        ESPState *inad_state = GetState(q_id, sa->id);
+
+        if (inad_state->heapindex != 0) {
+          heaps[q_id].deleteheap(inad_state);
+        }
+      }
+
+      // Next delete from the heap indexed by lazy set, if it is present.
+      const auto &wrapper_state =
+        environment_wrapper_->wrapper_state_hasher_.GetState(sa->id);
+      auto edge_set_state = GetEdgeSetState(sa);
+
+      if (edge_set_state->heapindex != 0) {
+        edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
+      }
+    }
+  }
+}
+
+void ESPPlanner::UpdateStatesWithValidEdgeGroup(int edge_group_id) {
+  vector<int> states_to_update;
+  states_to_update.reserve(heaps[0].currentsize);
+
+  for (int kk = 1; kk <= heaps[0].currentsize; ++kk) {
+    ESPState *sa = (ESPState *)heaps[0].heap[kk].heapstate;
+
+    if (!environment_wrapper_->WrapperContainsEdgeGroup(sa->id, edge_group_id)) {
+      continue;
+    }
+
+    states_to_update.push_back(sa->id);
+  }
+
+  for (int ii = 0; ii < static_cast<int>(states_to_update.size()); ++ii) {
+    const int state_to_update = states_to_update[ii];
+    auto anchor_original_state = GetState(0, state_to_update);
+    int new_wrapper_state_id = environment_wrapper_->GetUpdatedWrapperStateID(
+                                 state_to_update, invalid_edge_groups_, valid_edge_groups_);
+
+    ESPState *anchor_new_sa = GetState(0, new_wrapper_state_id);
+
+    if (anchor_new_sa->iteration_closed == search_iteration) {
+      continue;
+    }
+
+    CKey key = heaps[0].getkeyheap(anchor_original_state);
+
+    for (int q_id = 0; q_id < num_heuristics; ++q_id) {
+      ESPState *state = GetState(q_id, new_wrapper_state_id);
+      auto original_state = GetState(q_id, state_to_update);
+      *state = *original_state;
+      state->id = new_wrapper_state_id;
+      putStateInHeap(q_id, state);
+    }
+
+    // Next delete from the heap indexed by lazy set, if it is present.
+    const auto &new_wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(new_wrapper_state_id);
+    auto edge_set_state = GetEdgeSetState(new_wrapper_state_id);
+
+    const auto &idx = new_wrapper_state.lazy_edges;
+    auto state = GetEdgeSetState(new_wrapper_state_id);
+    auto original_state = GetEdgeSetState(state_to_update);
+    *state = *original_state;
+    state->id = new_wrapper_state_id;
+
+    if (edge_set_state->heapindex == 0) {
+      edge_set_heaps_[idx].insertheap(state, key);
+    }
+  }
+}
+
 vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
   return GetCurrentSolutionPaths(path_ids, false);
 }
@@ -2189,7 +2332,7 @@ vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids,
     }
 
     int path_cost = 0;
-    vector<int> wrapper_ids_path = GetSearchPath(search_state,
+    vector<int> wrapper_ids_path = GetSearchPathUnsafe(search_state,
                                                  path_cost);
     auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
                            wrapper_ids_path);

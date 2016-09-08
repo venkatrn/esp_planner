@@ -195,9 +195,10 @@ class ESPPlanner : public SBPLPlanner {
 
   std::unordered_set<int> evaluated_goal_wrapper_ids_;
   std::unordered_set<sbpl::Edge> invalid_edges_;
-  std::unordered_set<int> invalid_edge_groups_;
+  std::set<int> invalid_edge_groups_;
   std::unordered_set<sbpl::Edge> valid_edges_;
-  std::unordered_set<int> valid_edge_groups_;
+  std::set<int> valid_edge_groups_;
+  std::set<int> evaluated_edge_groups_;
 
  protected:
   //data structures (open and incons lists)
@@ -281,6 +282,7 @@ class ESPPlanner : public SBPLPlanner {
   virtual ESPState *GetState(int q_id, int id);
   virtual BestHState *GetBestHState(int q_id, int id);
   virtual EdgeSetState *GetEdgeSetState(ESPState *esp_state);
+  virtual EdgeSetState *GetEdgeSetState(int state_id);
   virtual void ExpandState(int q_id, ESPState *parent);
   bool putStateInHeap(int q_id, ESPState *state);
 
@@ -288,6 +290,7 @@ class ESPPlanner : public SBPLPlanner {
   void checkHeaps(std::string msg);
 
   virtual std::vector<int> GetSearchPath(ESPState *end_state, int &solcost);
+  virtual std::vector<int> GetSearchPathUnsafe(ESPState *end_state, int &solcost);
 
   virtual bool outOfTime();
   virtual void initializeSearch();
@@ -303,6 +306,8 @@ class ESPPlanner : public SBPLPlanner {
   // goal's g, v and parent values to a goal in a different manifold, if has
   // been validated as feasible.
   virtual void UpdateGoalFromValidatedGoal(int validated_state_id);
+  virtual void PruneStatesWithInvalidEdgeGroup(int invalid_edge_group_id);
+  virtual void UpdateStatesWithValidEdgeGroup(int valid_edge_group_id);
   virtual void EdgeEvaluationCB();
   EdgeEvaluationParams edge_evaluation_params_;
 };

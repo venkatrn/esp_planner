@@ -389,6 +389,8 @@ class EnvironmentNAV2DProb : public EnvironmentESP {
   EnvNav2DProbConfig_t EnvNav2DProbCfg;
   EnvironmentNAV2DProb_t EnvNav2DProb;
   GridVisualizer visualizer_;
+  std::unordered_map<int, int> state_expand_count_;
+
   SBPL2DGridSearch
   *grid2Dsearchfromgoal; //computes h-values that estimate distances to goal x,y from all cells
   std::unordered_map<int, bool> true_cost_cache_; // Mapping from edge_group ID to existence.

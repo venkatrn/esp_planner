@@ -54,6 +54,57 @@ static clock_t time_getsuccs = 0;
 constexpr bool kVisualize = false;
 
 int kCount = 0;
+int kDisplayAfterNumExpansions = 1000;
+
+void HSVtoRGB( double *r, double *g, double *b, double h, double s, double v)
+{
+  int i;
+  double f, p, q, t;
+  if( s == 0 ) {
+    // achromatic (grey)
+    *r = *g = *b = v;
+    return;
+  }
+  h /= 60;        // sector 0 to 5
+  i = floor(h);
+  f = h - i;      // factorial part of h
+  p = v * ( 1 - s );
+  q = v * ( 1 - s * f );
+  t = v * ( 1 - s * ( 1 - f ) );
+  switch( i ) {
+    case 0:
+      *r = v;
+      *g = t;
+      *b = p;
+      break;
+    case 1:
+      *r = q;
+      *g = v;
+      *b = p;
+      break;
+    case 2:
+      *r = p;
+      *g = v;
+      *b = t;
+      break;
+    case 3:
+      *r = p;
+      *g = q;
+      *b = v;
+      break;
+    case 4:
+      *r = t;
+      *g = p;
+      *b = v;
+      break;
+    default:
+      *r = v;
+      *g = p;
+      *b = q;
+      break;
+  }
+}
+
 
 //-------------------constructor--------------------------------------------
 EnvironmentNAV2DProb::EnvironmentNAV2DProb() {
@@ -1224,11 +1275,21 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   // Visualize
   if (kVisualize) {
     kCount++;
-    visualizer_.VisualizeState(HashEntry->X, HashEntry->Y);
+    int expand_count = state_expand_count_[parent_id];
+    double color_idx;
+    if (expand_count == 0){
+      visualizer_.VisualizeState(HashEntry->X, HashEntry->Y, 127, 127, 127);
+    } else {
+      color_idx = 250.0 * (expand_count + 5) / 10;
+      double r, g, b;
+      HSVtoRGB(&r, &g, &b, color_idx, 1.0, 1.0);
+      visualizer_.VisualizeState(HashEntry->X, HashEntry->Y, 255 * r, 255 * g, 255 * b);
+    }
 
-    if (kCount % 100 == 0) {
+    if (kCount % kDisplayAfterNumExpansions == 0) {
       visualizer_.Display(1);
     }
+    state_expand_count_[parent_id] = state_expand_count_[parent_id] + 1;
   }
 
   //iterate through actions

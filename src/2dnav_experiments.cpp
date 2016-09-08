@@ -78,11 +78,13 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
     params.mha_type = mha_planner::MHAType::FOCAL;
 
     EdgeEvaluationParams edge_eval_params;
-    edge_eval_params.strategy = EvaluationStrategy::AFTER_N_EXPANDS;
+    edge_eval_params.strategy = EvaluationStrategy::DIJKSTRA_TIME_BASED;
+    // edge_eval_params.strategy = EvaluationStrategy::AFTER_ALL_PATHS;
+    // edge_eval_params.strategy = EvaluationStrategy::AFTER_N_EXPANDS;
     // edge_eval_params.strategy = EvaluationStrategy::AFTER_N_PATHS;
     edge_eval_params.after_n_expands = 10000;
     edge_eval_params.after_n_paths = 1;
-    // edge_eval_params.selector = EdgeOrderStrategy::SSP;
+    edge_eval_params.selector = EdgeOrderStrategy::SSP;
     // edge_eval_params.selector = EdgeOrderStrategy::MOST_LIKELY;
     planner->SetEdgeEvaluationParams(edge_eval_params);
 
@@ -290,8 +292,8 @@ int main(int argc, char *argv[]) {
     return (false);
   }
 
-  const int num_trials = 1;
-  const int num_start_goal_pairs = 5;
+  const int num_trials = 10;
+  const int num_start_goal_pairs = 10;
 
   std::unique_ptr<ofstream> fs;
 
@@ -311,15 +313,15 @@ int main(int argc, char *argv[]) {
       // cv::waitKey(0);
       for (int planner_type = 0; planner_type < NUM_PLANNER_TYPES; planner_type++) {
 
-        auto ee_stats = plan2d(static_cast<PlannerType>(planner_type), instance,
-                               probabilities, edge_groups,
-                               obsthresh, start_x, start_y, goal_x, goal_y);
-
         // if (planner_type == 0) {
         //   continue;
         // } else {
         //  start_goal_pair++;
         // }
+
+        auto ee_stats = plan2d(static_cast<PlannerType>(planner_type), instance,
+                               probabilities, edge_groups,
+                               obsthresh, start_x, start_y, goal_x, goal_y);
 
         // Skip this trial if no solution exists.
         if (planner_type == 0) {

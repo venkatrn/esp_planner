@@ -136,6 +136,7 @@ class EnvWrapper {
   // Return all the wrapper IDs that all have the same underlying env_state_id as
   // that of the state with wrapper_id.
   std::vector<int> AllEquivalentWrapperIDs(int wrapper_state_id) const;
+  std::vector<int> AllSubsetWrapperIDs(int wrapper_state_id, const std::set<int>& valid_edge_groups) const;
   std::vector<int> AllSubsetWrapperIDs(int wrapper_state_id) const;
   int WrapperToStateID(int wrapper_id) const;
   // Returns ID of the newly created state, or the existing state.
@@ -147,6 +148,10 @@ class EnvWrapper {
   // Does edges contain any of the edges in wrapper_state.lazy_edges.
   bool WrapperContainsInvalidEdge(int wrapper_state_id,
                                   const std::unordered_set<sbpl::Edge> &edges);
+  // Is edge_group_id in wrapper_state.lazy_edges
+  bool WrapperContainsEdgeGroup(int wrapper_state_id,
+                                  int invalid_edge_group_id);
+  int GetUpdatedWrapperStateID(int wrapper_state_id, const std::set<int>& invalid_edge_groups, const std::set<int>& valid_edge_groups);
 
   void SetOriginalGoalID(int original_goal_id);
 
