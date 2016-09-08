@@ -89,6 +89,9 @@ class EdgeSelectorSSP {
   SSPState SSPStateIDToSSPState(int ssp_state_id) const;
   int GetBestValidPathIdx(const SSPState &ssp_state) const;
   double GetSuboptimalityBound(const SSPState &ssp_state) const;
+  // Return the id of the most probable unevaluated edge. Returns -1 if there
+  // is no unevaluated edge.
+  int MostLikelyUnevaluatedEdgeID(const SSPState &ssp_state) const;
   void SetVerbose(bool make_verbose) {
     verbose_ = make_verbose;
   }

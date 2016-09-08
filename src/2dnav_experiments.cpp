@@ -24,7 +24,7 @@ enum PlannerType {
 };
 
 int group_id = 1;
-constexpr double kTimeLimit = 20.0;  // s
+constexpr double kTimeLimit = 30.0;  // s
 
 // Defaults for existence probability and evaluation time.
 double kExistenceProbability = 0.5;
@@ -76,6 +76,16 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
     params.final_eps = 1;
     params.return_first_solution = false;
     params.mha_type = mha_planner::MHAType::FOCAL;
+
+    EdgeEvaluationParams edge_eval_params;
+    edge_eval_params.strategy = EvaluationStrategy::AFTER_N_EXPANDS;
+    // edge_eval_params.strategy = EvaluationStrategy::AFTER_N_PATHS;
+    edge_eval_params.after_n_expands = 10000;
+    edge_eval_params.after_n_paths = 1;
+    // edge_eval_params.selector = EdgeOrderStrategy::SSP;
+    // edge_eval_params.selector = EdgeOrderStrategy::MOST_LIKELY;
+    planner->SetEdgeEvaluationParams(edge_eval_params);
+
     // vector<int> solution_ids;
     vector<sbpl::Path> solution_paths;
     int solution_cost = 0;
@@ -118,7 +128,7 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
     }
 
     ReplanParams params(kTimeLimit);
-    params.initial_eps = 20;
+    params.initial_eps = 1;
     params.final_eps = 1;
     params.dec_eps = 1;
     params.return_first_solution = false;
@@ -265,8 +275,10 @@ int main(int argc, char *argv[]) {
   boost::filesystem::path output_file =
     "/usr0/home/venkatrn/indigo_workspace/src/esp_planner/stats";
   ofstream fs_esp, fs_lazy;
-  fs_esp.open ((output_file.string() + "_esp.txt").c_str());
-  fs_lazy.open ((output_file.string() + "_lazy.txt").c_str());
+  string filename = output_file.string() + "_esp_" + argv[2] + "_" +
+    argv[3];
+  fs_esp.open ((filename + "_esp.txt").c_str());
+  fs_lazy.open ((filename + "_lazy.txt").c_str());
 
   if (!fs_esp.is_open () || fs_esp.fail ()) {
     printf("Can't open stats file %s\n", output_file.string().c_str());
@@ -278,7 +290,7 @@ int main(int argc, char *argv[]) {
     return (false);
   }
 
-  const int num_trials = 5;
+  const int num_trials = 1;
   const int num_start_goal_pairs = 5;
 
   std::unique_ptr<ofstream> fs;
@@ -287,24 +299,35 @@ int main(int argc, char *argv[]) {
     cv::Mat instance;
     GenerateGroundTruth(costs, probabilities, edge_groups, instance);
 
-    for (int jj = 0; jj < num_start_goal_pairs; ++jj) {
+    int start_goal_pair = 0;
+
+    // Will ensure num_start_goal_pairs experiments are successful (i.e, path
+    // exists for this instance using the lazy A* planner).
+    while (start_goal_pair < num_start_goal_pairs) {
       int start_x, start_y, goal_x, goal_y;
       GetRandomValidStartGoalPair(instance, &start_x, &start_y, &goal_x, &goal_y);
 
       // cv::imshow("Instance", 255 * (instance));
       // cv::waitKey(0);
       for (int planner_type = 0; planner_type < NUM_PLANNER_TYPES; planner_type++) {
-        // if (planner_type == 0) {
-        //   continue;
-        // }
 
         auto ee_stats = plan2d(static_cast<PlannerType>(planner_type), instance,
                                probabilities, edge_groups,
                                obsthresh, start_x, start_y, goal_x, goal_y);
 
+        // if (planner_type == 0) {
+        //   continue;
+        // } else {
+        //  start_goal_pair++;
+        // }
+
         // Skip this trial if no solution exists.
-        if (ee_stats.empty() || ee_stats.back().cost == INFINITECOST) {
-          break;
+        if (planner_type == 0) {
+          if (ee_stats.empty() || ee_stats.back().cost == INFINITECOST) {
+            break;
+          } else {
+            start_goal_pair++;
+          }
         }
 
         // auto ee_stats = plan2d(static_cast<PlannerType>(planner_type), instance,

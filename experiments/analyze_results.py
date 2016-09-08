@@ -52,12 +52,10 @@ for ii in xrange(num_lines / 2):
     times = np.hstack(([0], times, [1000.0]))
     costs = np.hstack(([MAX_COST], costs, [opt_cost]))
     bounds = costs / opt_cost
-    mask = (costs > MAX_COST - 1)
-    mask[-1] = 0
-    mask[-2] = 0
-    # bounds = bounds[mask]
-    # times = times[mask]
-    bounds[mask] = MAX_BOUND
+    # mask = (costs > MAX_COST - 1)
+    # mask[-1] = 0
+    # mask[-2] = 0
+    # bounds[mask] = MAX_BOUND
     # print bounds
     # Interpolate intermediate values
     f = interpolate.interp1d(times, bounds, kind='zero')
@@ -67,15 +65,13 @@ for ii in xrange(num_lines / 2):
     avg_trace += trace
     num_valid_trials = num_valid_trials + 1
     time_to_optimal_sol = np.hstack((time_to_optimal_sol, times[-2]))
-    valid_times = times[~mask]
     # print costs
-    print valid_times
-    time_to_first_sol = np.hstack((time_to_first_sol, valid_times[0]))
+    time_to_first_sol = np.hstack((time_to_first_sol, times[1]))
 avg_trace /= num_valid_trials
-avg_time_to_optimal_sol = np.mean(time_to_optimal_sol)
-avg_time_to_first_sol = np.mean(time_to_first_sol)
+avg_time_to_optimal_sol = np.median(time_to_optimal_sol)
+avg_time_to_first_sol = np.median(time_to_first_sol)
 # plt.plot(time_axis, avg_trace, '-o')
-plt.show()
-# print avg_trace
+# plt.show()
+print time_to_optimal_sol
 print avg_time_to_optimal_sol
 print avg_time_to_first_sol

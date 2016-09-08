@@ -118,13 +118,13 @@ void EdgeSelectorSSP::SetPaths(const std::vector<Path> &paths) {
   for (size_t ii = 0; ii < paths.size(); ++ii) {
     auto &path_bit_vector = path_bit_vectors_[ii];
     path_bit_vector.resize(num_edges);
-    const auto &simplified_paths = simplified_paths_[ii];
+    const auto &simplified_path = simplified_paths_[ii];
 
-    for (size_t jj = 0; jj < simplified_paths.size(); ++jj) {
+    for (size_t jj = 0; jj < simplified_path.size(); ++jj) {
       /////////////////////////////// WARNING ////////////////////////////////
       // This assumes edge_ids are generated sequentially by the edge_hasher!!!
       /////////////////////////////// WARNING ////////////////////////////////
-      const int edge_id = simplified_paths[jj];
+      const int edge_id = simplified_path[jj];
       assert(edge_id < num_edges);
       path_bit_vector.set(edge_id);
     }
@@ -240,50 +240,20 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
                                     int *lower_bound_idx,
                                     int *upper_bound_idx) const {
   *lower_bound = std::numeric_limits<int>::max();
-  *upper_bound = 0;
+  *upper_bound = std::numeric_limits<int>::max();
+  int nonevaluated_upper_bound = 0;
 
   *lower_bound_idx = -1;
   *upper_bound_idx = -1;
 
-  // Initialize the upper bound to the max cost path (of a possible path--.i.e, not invalid), so we have
-  // something even if all paths are stochastic. The lower bound is
-  // automatically taken care of in the next step.
-  bool atleast_one_possible_path = false;
-  for (size_t ii = 0; ii < paths_.size(); ++ii) {
-    const auto &path_bit_vector = path_bit_vectors_[ii];
-    const int path_status = PathStatus(path_bit_vector, ssp_state);
-    // Skip paths which are invalid.
-    if (path_status == -1) {
-      continue;
-    }
-    // TODO: make this elegant.
-    if (path_status == 0 && *upper_bound_idx != -1) {
-      continue;
-    }
-    const int cost = paths_[ii].cost;
-    if (*upper_bound < cost) {
-      *upper_bound = cost;
-      if (path_status == 1) {
-        *upper_bound_idx = static_cast<int>(ii);
-      }
-    }
-    atleast_one_possible_path = true;
-  }
-
-  // Special case where there are no possiible paths (all are invalid). Both
-  // bounds are infinite.
-  if (!atleast_one_possible_path) {
-    *upper_bound = std::numeric_limits<int>::max();
-    *lower_bound = *upper_bound;
-    *lower_bound_idx = -1;
-    *upper_bound_idx = -1;
-    return;
-  }
-
   for (size_t ii = 0; ii < paths_.size(); ++ii) {
     const auto &path_bit_vector = path_bit_vectors_[ii];
     const int cost = paths_[ii].cost;
     const int path_status = PathStatus(path_bit_vector, ssp_state);
+
+    if (path_status == 0) {
+      nonevaluated_upper_bound = std::max(cost, nonevaluated_upper_bound);
+    }
 
     if (path_status == 0 || path_status == 1) {
       if (cost < *lower_bound) {
@@ -299,6 +269,47 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
       }
     }
   }
+
+  // Special case where there are no possiible paths (all are invalid). Both
+  // bounds are infinite.
+  if (*lower_bound_idx == -1) {
+    *upper_bound = std::numeric_limits<int>::max();
+    *lower_bound = *upper_bound;
+    *lower_bound_idx = -1;
+    *upper_bound_idx = -1;
+    return;
+  }
+
+  // Another special case where there is no deterministic (fully evaluated
+  // path). In this case, we will set the upper bound equal to the lower bound
+  // but leave the index at -1 to ensure that the path is not
+  // executable.
+  if (*upper_bound_idx == -1) {
+    *upper_bound = nonevaluated_upper_bound;
+    *upper_bound_idx = -1;
+    return;
+  }
+}
+
+int EdgeSelectorSSP::MostLikelyUnevaluatedEdgeID(const SSPState &ssp_state) const {
+  BitVector evaluated_edges = ssp_state.valid_bits |
+                              ssp_state.invalid_bits;
+  int best_edge_id = -1;
+  // Start with -1 so we can return zero probability edges.
+  double best_probability = -1.0;
+  for (size_t ii = 0; ii < evaluated_edges.size(); ++ii) {
+    // Ignore edge if already evaluated.
+    if (evaluated_edges.test(ii)) {
+      continue;
+    }
+    const auto& edge = edge_hasher_.GetState(ii);
+    const double probability = edge.probability;
+    if (probability > best_probability) {
+      best_probability = probability;
+      best_edge_id = static_cast<int>(ii);
+    }
+  }
+  return best_edge_id;
 }
 
 double EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
