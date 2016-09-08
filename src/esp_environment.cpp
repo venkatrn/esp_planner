@@ -366,13 +366,18 @@ bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id,
 
   std::unordered_set<int> invalid_edge_groups;
 
+  bool using_edge_groups = true;
   for (const auto &invalid_edge : edges) {
-    // TODO: check this exists.
-    invalid_edge_groups.insert(edge_to_group_id_mapping_[invalid_edge]);
+    auto it = edge_to_group_id_mapping_.find(invalid_edge);
+    if (it != edge_to_group_id_mapping_.end()) {
+      invalid_edge_groups.insert(edge_to_group_id_mapping_[invalid_edge]);
+    } else {
+      using_edge_groups = false;
+      break;
+    }
   }
 
   // Make this clear when defining edge groups.
-  bool using_edge_groups = (invalid_edge_groups.size() > 1);
 
   if (!using_edge_groups) {
     for (const auto &edge_id : wrapper_state.all_stochastic_edges) {

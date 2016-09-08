@@ -9,22 +9,26 @@
 
 #include <boost/filesystem.hpp>
 
-#include <memory>
 #include <fstream>
+#include <memory>
+#include <string>
 
 using namespace std;
 
 enum PlannerType {
   INVALID_PLANNER_TYPE = -1,
-  PLANNER_TYPE_ESP,
   PLANNER_TYPE_LAZY_ARA,
+  PLANNER_TYPE_ESP,
 
   NUM_PLANNER_TYPES
 };
 
 int group_id = 1;
-constexpr double kTimeLimit = 20.0;
-constexpr double kExistenceProbability = 0.5;
+constexpr double kTimeLimit = 20.0;  // s
+
+// Defaults for existence probability and evaluation time.
+double kExistenceProbability = 0.5;
+int kEdgeEvaluationTime = 1000000; // us
 
 vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
                             cv::Mat probabilities, cv::Mat edge_groups, unsigned char obsthresh,
@@ -47,6 +51,7 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
                                        goal_x, goal_y, obsthresh)) {
     printf("ERROR: InitializeEnv failed\n");
   }
+  environment_nav2D.SetStochasticEdgeEvaluationTime(kEdgeEvaluationTime);
 
   // Initialize MDP Info
   if (!environment_nav2D.InitializeMDPCfg(&MDPCfg)) {
@@ -74,21 +79,27 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
     // vector<int> solution_ids;
     vector<sbpl::Path> solution_paths;
     int solution_cost = 0;
-    planner->replan(&solution_paths, params, &solution_cost);
-    printf("Found %d possible paths:\n", static_cast<int>(solution_paths.size()));
+    bool success = planner->replan(&solution_paths, params, &solution_cost);
 
-    for (size_t ii = 0; ii < solution_paths.size(); ++ii) {
-      const auto &solution_path = solution_paths[ii];
-      cout << "Cost: " << solution_path.cost << "     ";
-
-      for (size_t jj = 0; jj < solution_path.state_ids.size(); ++jj) {
-        cout << solution_path.state_ids[jj] << " ";
-      }
-
-      cout << endl;
+    if (success) {
+      printf("Found solution with size %zu and cost %d\n",
+             solution_paths[0].state_ids.size(), solution_cost);
+    } else {
+      printf("Lazy ESP failed to get solution\n");
     }
 
-    cout << endl;
+    // printf("Found %d possible paths:\n", static_cast<int>(solution_paths.size()));
+    // for (size_t ii = 0; ii < solution_paths.size(); ++ii) {
+    //   const auto &solution_path = solution_paths[ii];
+    //   cout << "Cost: " << solution_path.cost << "     ";
+    //
+    //   for (size_t jj = 0; jj < solution_path.state_ids.size(); ++jj) {
+    //     cout << solution_path.state_ids[jj] << " ";
+    //   }
+    //
+    //   cout << endl;
+    // }
+    // cout << endl;
 
     planner->get_ee_stats(&ee_stats);
   } else if (planner_type == PLANNER_TYPE_LAZY_ARA) {
@@ -118,7 +129,7 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
 
     if (success) {
       printf("Found solution with size %zu and cost %d\n",
-             static_cast<int>(solution.size()), solution_cost);
+                solution.size(), solution_cost);
     } else {
       printf("Lazy ARA failed to get solution\n");
     }
@@ -136,11 +147,9 @@ void GenerateGroundTruth(const cv::Mat &full_graph,
   double min, max;
   cv::minMaxIdx(edge_groups, &min, &max);
   int num_groups = max - 1;
-  srand (time(NULL));
-
   for (int ii = 1; ii <= num_groups; ++ii) {
     int rand_val = rand() % 100;
-    bool should_block = rand_val > kExistenceProbability * 100;
+    bool should_block = rand_val > (kExistenceProbability * 100);
 
     if (should_block) {
       graph_instance.setTo(1.0, edge_groups == ii);
@@ -152,7 +161,7 @@ void GetRandomValidStartGoalPair(const cv::Mat &graph_instance,
                                  int *start_x, int *start_y, int *goal_x, int *goal_y) {
   int width = graph_instance.cols;
   int height = graph_instance.rows;
-  const int kMaxIter = 1000;
+  const int kMaxIter = 10000;
 
   *start_x = rand() % (width);
   *start_y = rand() % (height);
@@ -186,9 +195,20 @@ void AddStochasticEdges(cv::Mat probabilities, cv::Mat edge_groups, int x,
 }
 
 int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    printf("Usage: ./2dnav_experiments image_file");
+  if (argc < 4) {
+    printf("Usage: ./2dnav_experiments image_file existence_probability collision_check_time\n");
+    return -1;
   }
+
+  kExistenceProbability = stod(string(argv[2]));
+  kEdgeEvaluationTime = stoi(string(argv[3]));
+
+  cout << "Existence prob: " << kExistenceProbability << endl;
+  cout << "Eval time: " << kEdgeEvaluationTime << endl;
+
+  // Fixed seed for repeatability.
+  srand (1);
+  // srand (time(NULL));
 
   cv::Mat image = cv::imread(argv[1], CV_LOAD_IMAGE_GRAYSCALE);
   printf("Loaded map with %d rows and %d cols\n", image.rows, image.cols);
@@ -258,8 +278,8 @@ int main(int argc, char *argv[]) {
     return (false);
   }
 
-  const int num_trials = 10;
-  const int num_start_goal_pairs = 10;
+  const int num_trials = 5;
+  const int num_start_goal_pairs = 5;
 
   std::unique_ptr<ofstream> fs;
 
@@ -274,6 +294,9 @@ int main(int argc, char *argv[]) {
       // cv::imshow("Instance", 255 * (instance));
       // cv::waitKey(0);
       for (int planner_type = 0; planner_type < NUM_PLANNER_TYPES; planner_type++) {
+        // if (planner_type == 0) {
+        //   continue;
+        // }
 
         auto ee_stats = plan2d(static_cast<PlannerType>(planner_type), instance,
                                probabilities, edge_groups,

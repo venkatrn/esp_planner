@@ -234,6 +234,10 @@ class EnvironmentNAV2DProb : public EnvironmentESP {
                              const double *probabilities, const unsigned char *edge_groups,
                              unsigned char obsthresh);
 
+  virtual bool SetStochasticEdgeEvaluationTime(int time_in_microseconds) {
+    edge_eval_time_ = time_in_microseconds;
+  }
+
   /**
    * \brief set start location
    */
@@ -388,6 +392,7 @@ class EnvironmentNAV2DProb : public EnvironmentESP {
   SBPL2DGridSearch
   *grid2Dsearchfromgoal; //computes h-values that estimate distances to goal x,y from all cells
   std::unordered_map<int, bool> true_cost_cache_; // Mapping from edge_group ID to existence.
+  int edge_eval_time_ = 0; // us.
 
   virtual void ReadConfiguration(FILE *fCfg);
 

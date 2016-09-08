@@ -256,10 +256,16 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
     if (path_status == -1) {
       continue;
     }
+    // TODO: make this elegant.
+    if (path_status == 0 && *upper_bound_idx != -1) {
+      continue;
+    }
     const int cost = paths_[ii].cost;
     if (*upper_bound < cost) {
       *upper_bound = cost;
-      *upper_bound_idx = static_cast<int>(ii);
+      if (path_status == 1) {
+        *upper_bound_idx = static_cast<int>(ii);
+      }
     }
     atleast_one_possible_path = true;
   }
@@ -269,6 +275,8 @@ void EdgeSelectorSSP::ComputeBounds(const SSPState &ssp_state,
   if (!atleast_one_possible_path) {
     *upper_bound = std::numeric_limits<int>::max();
     *lower_bound = *upper_bound;
+    *lower_bound_idx = -1;
+    *upper_bound_idx = -1;
     return;
   }
 
@@ -304,7 +312,7 @@ double EdgeSelectorSSP::GetSuboptimalityBound(const SSPState &ssp_state) const {
     return 1.0;
   }
   const double bound = static_cast<double>(upper_bound) / static_cast<double>(lower_bound);
-  cout << lower_bound << "  " << upper_bound << " " << bound << endl;
+  // cout << lower_bound << "  " << upper_bound << " " << bound << endl;
   return bound;
 }
 
@@ -328,7 +336,11 @@ bool EdgeSelectorSSP::IsGoalState(int state_id) const {
   // are no more edges to evaluate (in which case also we should have a
   // suboptimality bound of 1 by design--so it should never really happen).
 
-  return fabs(ssp_state.suboptimality_bound - 1.0) < kFloatingPointTolerance || ssp_state.GetUnevaluatedEdges().empty();
+  int best_valid_path_idx = GetBestValidPathIdx(ssp_state);
+  const bool optimal_executable_soln_found = (best_valid_path_idx != -1) && fabs(ssp_state.suboptimality_bound - 1.0) < kFloatingPointTolerance;
+  const bool all_edges_evaluated = ssp_state.GetUnevaluatedEdges().empty();
+  // cout << "Goal check: " << best_valid_path_idx << " " << optimal_executable_soln_found << " " << all_edges_evaluated << endl;
+  return (optimal_executable_soln_found || all_edges_evaluated);
 }
 
 double EdgeSelectorSSP::GetGoalHeuristic(int state_id) const {

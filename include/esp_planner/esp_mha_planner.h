@@ -189,6 +189,7 @@ class ESPPlanner : public SBPLPlanner {
   ESPState *goal_state;
   ESPState *start_state;
   int goal_state_id;
+  int orig_goal_state_id;
   int start_state_id;
 
   std::vector<int> goal_wrapper_ids_;
@@ -266,4 +267,10 @@ class ESPPlanner : public SBPLPlanner {
   // MHA-specific
   virtual int GetBestHeuristicID();
   virtual bool UpdateGoal(ESPState* state);
+
+  // ESP
+  // When interleaving planning and evaluation, we might want to set the actual
+  // goal's g, v and parent values to a goal in a different manifold, if has
+  // been validated as feasible.
+  virtual void UpdateGoalFromValidatedGoal(int validated_state_id);
 };

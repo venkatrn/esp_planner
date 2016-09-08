@@ -51,7 +51,6 @@ static clock_t time_createhash = 0;
 static clock_t time_getsuccs = 0;
 #endif
 
-constexpr int kCollisionCheckFakeTime = 1000000; // microseconds;
 constexpr bool kVisualize = false;
 
 int kCount = 0;
@@ -217,8 +216,8 @@ void EnvironmentNAV2DProb::SetConfiguration(int width, int height,
   if (kVisualize) {
     visualizer_.SetGrid(EnvNav2DProbCfg.Grid2D, EnvNav2DProbCfg.EnvHeight_c,
                         EnvNav2DProbCfg.EnvWidth_c);
-    visualizer_.AddSpecialState(startx, starty, 0, 255, 0);
-    visualizer_.AddSpecialState(goalx, goaly, 255, 0, 0);
+    visualizer_.AddSpecialState(startx, starty, 255, 255, 0);
+    visualizer_.AddSpecialState(goalx, goaly, 0, 0, 255);
   }
 }
 
@@ -1255,7 +1254,7 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     int costmult = EnvNav2DProbCfg.Grid2D[newX][newY];
     double probability = EnvNav2DProbCfg.GridProb2D[newX][newY];
     unsigned char edge_group_id = EnvNav2DProbCfg.GridEdgeGroup2D[newX][newY];
-    double time = kCollisionCheckFakeTime * 1e-6;
+    double time = static_cast<double>(edge_eval_time_) * 1e-6;
 
     //for diagonal move, take max over adjacent cells
     //for edge group id, we assume that deterministic cells have the largest ID
@@ -1323,12 +1322,11 @@ void EnvironmentNAV2DProb::GetSuccs(int parent_id, std::vector<int> *succ_ids,
       }
       edge_groups->push_back(static_cast<int>(edge_group_id));
       edge_probabilities->push_back(1.0);
-      costs->push_back(it->second);
     } else {
       edge_groups->push_back(static_cast<int>(edge_group_id));
       edge_probabilities->push_back(probability);
-      costs->push_back(cost);
     }
+    costs->push_back(cost);
     succ_ids->push_back(OutHashEntry->stateID);
     edge_eval_times->push_back(time);
   }
@@ -1391,7 +1389,7 @@ bool EnvironmentNAV2DProb::EvaluateEdge(int parent_id, int child_id,
   int costmult = EnvNav2DProbCfg.Grid2D[newX][newY];
   double probability = EnvNav2DProbCfg.GridProb2D[newX][newY];
   unsigned char edge_group_id = EnvNav2DProbCfg.GridEdgeGroup2D[newX][newY];
-  double time = kCollisionCheckFakeTime;
+  double time = edge_eval_time_;
 
   //for diagonal move, take max over adjacent cells
   //for edge group id, we assume that deterministic cells have the largest ID
@@ -1440,12 +1438,22 @@ bool EnvironmentNAV2DProb::EvaluateEdge(int parent_id, int child_id,
   // Add a delay here to fake collision checking time for probabilitstic edges
   // only.
   if (probability < 1.0) {
-    sleep_for(microseconds(kCollisionCheckFakeTime));
+    sleep_for(microseconds(edge_eval_time_));
   }
 
   //check that it is valid
   bool is_valid = costmult < EnvNav2DProbCfg.obsthresh;
   true_cost_cache_[edge_group_id] = is_valid;
+
+  if (kVisualize) {
+    if (is_valid) {
+      visualizer_.AddSpecialState(HashEntry->X, HashEntry->Y, 0, 255, 0);
+    } else {
+      visualizer_.AddSpecialState(HashEntry->X, HashEntry->Y, 255, 0, 0);
+    }
+    visualizer_.Display(1);
+  }
+
   return is_valid;
 }
 
