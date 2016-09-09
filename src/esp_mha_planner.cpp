@@ -1393,7 +1393,7 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
   SSPState current_state = start_state;
   const double kBoundForTermination = 1.0;
   int old_best_valid_path_idx = -1;
-  double old_bound = start_state.suboptimality_bound;
+  double old_bound = 0.0;
   high_res_clock::time_point before_time = high_res_clock::now();
 
   while (true) {
@@ -1486,8 +1486,11 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
     // Currently recording only new feasible solutions that are different from
     // previous solutions.
     const bool is_path_executable = (best_valid_path_idx != -1);
+    // const bool new_solution = !(best_valid_path_idx == old_best_valid_path_idx 
+    //                             && fabs(old_bound - bound) < 1e-8);
 
-    if (is_path_executable && fabs(old_bound - bound) > 1e-3) {
+    // if (is_path_executable && new_solution) {
+    if (is_path_executable) {
       const auto &path = paths[best_valid_path_idx];
       int id = path.state_ids.back();
       const bool is_path_to_goal = (id == orig_goal_state_id);
@@ -1495,12 +1498,10 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
       if (is_path_to_goal) {
         AddNewSolution(paths[best_valid_path_idx]);
       }
+      old_best_valid_path_idx = best_valid_path_idx;
+      old_bound = bound;
     }
-
-    old_best_valid_path_idx = best_valid_path_idx;
-    old_bound = bound;
   }
-
   return best_valid_path_idx;
 }
 

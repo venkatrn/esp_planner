@@ -11,6 +11,7 @@
 
 #include <fstream>
 #include <memory>
+#include <random>
 #include <string>
 
 using namespace std;
@@ -25,6 +26,10 @@ enum PlannerType {
 
 int group_id = 1;
 constexpr double kTimeLimit = 30.0;  // s
+
+// Fixed seed for repeatability.
+unsigned seed = -838481029;
+default_random_engine generator (seed);
 
 // Defaults for existence probability and evaluation time.
 double kExistenceProbability = 0.5;
@@ -155,13 +160,14 @@ vector<PlannerStats> plan2d(PlannerType planner_type, cv::Mat costs,
 void GenerateGroundTruth(const cv::Mat &full_graph,
                          const cv::Mat &existence_probabilities, const cv::Mat &edge_groups,
                          cv::Mat &graph_instance) {
+  uniform_real_distribution<double> distribution (0.0, 1.0);
   graph_instance = full_graph.clone();
   double min, max;
   cv::minMaxIdx(edge_groups, &min, &max);
   int num_groups = max - 1;
   for (int ii = 1; ii <= num_groups; ++ii) {
-    int rand_val = rand() % 100;
-    bool should_block = rand_val > (kExistenceProbability * 100);
+    double rand_val = distribution(generator);
+    bool should_block = rand_val > kExistenceProbability;
 
     if (should_block) {
       graph_instance.setTo(1.0, edge_groups == ii);
@@ -218,8 +224,7 @@ int main(int argc, char *argv[]) {
   cout << "Existence prob: " << kExistenceProbability << endl;
   cout << "Eval time: " << kEdgeEvaluationTime << endl;
 
-  // Fixed seed for repeatability.
-  srand (1);
+  // srand (1);
   // srand (time(NULL));
 
   cv::Mat image = cv::imread(argv[1], CV_LOAD_IMAGE_GRAYSCALE);
