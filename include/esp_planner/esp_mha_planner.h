@@ -195,10 +195,10 @@ class ESPPlanner : public SBPLPlanner {
 
   std::unordered_set<int> evaluated_goal_wrapper_ids_;
   std::unordered_set<sbpl::Edge> invalid_edges_;
-  std::set<int> invalid_edge_groups_;
+  std::unordered_set<int> invalid_edge_groups_;
   std::unordered_set<sbpl::Edge> valid_edges_;
   std::set<int> valid_edge_groups_;
-  std::set<int> evaluated_edge_groups_;
+  std::unordered_set<int> evaluated_edge_groups_;
 
  protected:
   //data structures (open and incons lists)

@@ -11,7 +11,7 @@ find_package(catkin REQUIRED COMPONENTS sbpl sbpl_utils)
 find_package(OpenCV REQUIRED)
 
 ## System dependencies are found with CMake's conventions
-find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS system timer)
 
 
 ###################################
@@ -47,7 +47,7 @@ add_library(esp_planner
   src/esp_environment.cpp
   src/environments/environment_nav2D.cpp
 )
-target_link_libraries(esp_planner ${catkin_LIBRARIES})
+target_link_libraries(esp_planner ${catkin_LIBRARIES} ${Boost_TIMER_LIBRARIES})
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries

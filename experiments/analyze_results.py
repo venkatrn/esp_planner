@@ -37,7 +37,7 @@ for idx, f in enumerate(files):
     all_lines = f.read().split('\n')
     # Skip last empty line
     num_lines = len(all_lines) - 1
-    print 'Num Trials: {}'.format(num_lines / 2)
+    # print 'Num Trials: {}'.format(num_lines / 2)
     time_to_optimal_sol = []
     time_to_first_sol = []
     num_valid_trials = 0
@@ -59,21 +59,21 @@ for idx, f in enumerate(files):
     avg_time_to_optimal_sol = np.mean(time_to_optimal_sol)
     avg_time_to_first_sol = np.mean(time_to_first_sol)
     print avg_time_to_optimal_sol
-    print avg_time_to_first_sol
+    # print avg_time_to_first_sol
     # print t_data[idx, :]
 
 speedups = t_data[1,:] / t_data[0,:]
-print speedups
+# print speedups
 print stats.gmean(speedups)
 print np.mean(speedups)
 plt.plot(t_data[0,:], t_data[1,:], 'o')
-print np.sum(t_data[1,:] > t_data[0,:])
+# print np.sum(t_data[1,:] > t_data[0,:])
 
 # plt.plot(time_axis, avg_trace, '-o')
-plt.xlim(0, 10)
-plt.ylim(0, 10)
-plt.gca().set_aspect('equal', adjustable='box')
-plt.show()
+# plt.xlim(0, 10)
+# plt.ylim(0, 10)
+# plt.gca().set_aspect('equal', adjustable='box')
+# plt.show()
 # print time_to_optimal_sol
 
 

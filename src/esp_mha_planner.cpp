@@ -31,6 +31,11 @@
 #include <esp_planner/lao_planner.h>
 
 #include <boost/math/distributions.hpp>
+#include <boost/timer/timer.hpp>
+
+#define bo_ns(a) boost::chrono::nanoseconds(a)
+#define bo_sec(a) boost::chrono::duration_cast<boost::chrono::seconds>(bo_ns(a)).count()
+typedef boost::timer::auto_cpu_timer Timer;
 
 namespace {
 // Maximum time allowed for computing an LAO policy. Note that this time could
@@ -52,6 +57,15 @@ constexpr int kNumExpandsBeforeEdgeEval = 10000;
 
 // Should we terminate as soon as the first valid path is found?
 constexpr bool kTerminateOnFirstValidPath = true;
+
+// Should we use edge_set indexed heaps to generate partial path candidates for
+// evaluation?
+constexpr bool kUseEdgeSetIndexedHeaps = false;
+
+
+// Number of unproductive expansions (heuristic didn't decrease) before we
+// declare that the queue is stuck in a local minimum.
+constexpr int kNumExpandsForLocalMinDetection = 100;
 }
 
 using namespace boost::math;
@@ -85,6 +99,7 @@ ESPPlanner::ESPPlanner(EnvironmentESP *environment,
 
   const int max_edge_cost = 60;  // TODO: Get from environment.
   max_heur_dec.resize(num_heuristics, max_edge_cost);
+
 
   // DTS
   alpha.resize(num_heuristics, 1.0);
@@ -231,6 +246,7 @@ void ESPPlanner::ExpandState(int q_id, ESPState *parent) {
     // printf("  succ %d\n",children[i]);
     vector<int> equiv_wrapper_ids = environment_wrapper_->AllSubsetWrapperIDs(
                                       children[i], valid_edge_groups_);
+    // vector<int> equiv_wrapper_ids;
     bool prune = false;
 
     for (const int equiv_wrapper_id : equiv_wrapper_ids) {
@@ -414,13 +430,13 @@ void ESPPlanner::UpdateGoalFromValidatedGoal(int valid_goal_wrapper_id) {
   for (int ii = 0; ii < num_heuristics; ++ii) {
     temp_goal_state = GetState(ii, valid_goal_wrapper_id);
 
-    if (temp_goal_state->expanded_best_parent != NULL) {
+    if (temp_goal_state->best_parent != NULL) {
       break;
     }
   }
 
-  if (temp_goal_state->expanded_best_parent == NULL) {
-    printf("The goal state doesn't have a best expanded parent!!\n");
+  if (temp_goal_state->best_parent == NULL) {
+    printf("The goal state doesn't have a best parent!!\n");
   }
 
   *goal_state = *temp_goal_state;
@@ -458,7 +474,7 @@ bool ESPPlanner::UpdateGoal(ESPState *state) {
     // } else if (wrapper_state.env_state_id == goal_state_id &&
     //            kInterleavedEvaluation) {
   } else if (wrapper_state.env_state_id == goal_state_id &&
-             false) {
+             kTerminateOnFirstValidPath) {
     goal_wrapper_ids_.push_back(state->id);
     goal_subsets_.push_back(wrapper_state.lazy_edges);
 
@@ -476,7 +492,7 @@ bool ESPPlanner::UpdateGoal(ESPState *state) {
                                                           invalid_edges_)) {
       // printf("Evaluating Wrapper: %d\n", state->id);
       // cout << wrapper_state << endl;
-      valid_path_idx = RunEvaluation(&valid_goal_wrapper_id);
+      valid_path_idx = RunEvaluation(&valid_goal_wrapper_id, false);
     }
 
     // Reset meta-methods.
@@ -579,18 +595,21 @@ bool ESPPlanner::putStateInHeap(int q_id, ESPState *state) {
       heaps[q_id].insertheap(state, key);
     }
 
-    auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(
-                           state->id);
-    auto wrapper_heap_state = GetEdgeSetState(state);
 
-    if (edge_set_heaps_[wrapper_state.lazy_edges].currentsize == 0) {
-      edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
-    }
+    if (kUseEdgeSetIndexedHeaps) {
+      auto wrapper_state = environment_wrapper_->wrapper_state_hasher_.GetState(
+                             state->id);
+      auto wrapper_heap_state = GetEdgeSetState(state);
 
-    if (wrapper_heap_state->heapindex != 0) {
-      edge_set_heaps_[wrapper_state.lazy_edges].updateheap(wrapper_heap_state, key);
-    } else { //otherwise add it to the heap
-      edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
+      if (edge_set_heaps_[wrapper_state.lazy_edges].currentsize == 0) {
+        edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
+      }
+
+      if (wrapper_heap_state->heapindex != 0) {
+        edge_set_heaps_[wrapper_state.lazy_edges].updateheap(wrapper_heap_state, key);
+      } else { //otherwise add it to the heap
+        edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
+      }
     }
   }
   //if the state has already been expanded once for this iteration
@@ -629,6 +648,9 @@ int ESPPlanner::ImprovePath() {
   while (!heaps[0].emptyheap() &&
          min_key.key[0] < INFINITECOST &&
          !outOfTime()) {
+
+    // Timer loop_timer;
+    // auto loop_seconds = loop_timer.elapsed().wall;
 
 
     // Termination for different planners
@@ -884,8 +906,17 @@ int ESPPlanner::ImprovePath() {
 
     const auto &wrapper_state =
       environment_wrapper_->wrapper_state_hasher_.GetState(state->id);
-    auto edge_set_state = GetEdgeSetState(state);
-    edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
+
+    if (kUseEdgeSetIndexedHeaps) {
+      auto edge_set_state = GetEdgeSetState(state);
+
+      // Its possible we could have removed this guy from a different heuristic's
+      // queue, but the check is not needed if we are running a single heuristic
+      // search.
+      if (edge_set_state->heapindex != 0) {
+        edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
+      }
+    }
 
     // delete from the other queues as well if SMHA.
     if (planner_type == mha_planner::PlannerType::SMHA) {
@@ -992,7 +1023,9 @@ int ESPPlanner::ImprovePath() {
       if (!is_subset && is_feasible) {
         ExpandState(q_id, state);
       }
+
     }
+
 
     // Trigger an edge evaluation callback if we are interleaving evaluation.
     if (edge_evaluation_params_.strategy != EvaluationStrategy::AFTER_ALL_PATHS) {
@@ -1187,7 +1220,8 @@ vector<int> ESPPlanner::GetSearchPath(ESPState *end_state, int &solcost) {
   return wholePathIds;
 }
 
-vector<int> ESPPlanner::GetSearchPathUnsafe(ESPState *end_state, int &solcost) {
+vector<int> ESPPlanner::GetSearchPathUnsafe(ESPState *end_state,
+                                            int &solcost) {
   vector<int> SuccIDV;
   vector<int> CostV;
   vector<int> wholePathIds;
@@ -1311,7 +1345,7 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
   using namespace sbpl;
 
   std::shared_ptr<EdgeSelectorSSP> ssp(new EdgeSelectorSSP());
-  ssp->SetVerbose(false);
+  // ssp->SetVerbose(true);
   ssp->SetPaths(paths);
 
   const int num_edges = ssp->NumStochasticEdges();
@@ -1367,10 +1401,10 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
   }
 
   LAOPlannerParams lao_planner_params =
-    LAOPlannerParams::ParamsForOptimalPolicy();
-  // Other options:
-  // LAOPlannerParams::ParamsForGreedyOneStepPolicy();
-  // LAOPlannerParams::ParamsForOnlinePolicy(5 * 1e-3);
+    // LAOPlannerParams::ParamsForOptimalPolicy();
+    // Other options:
+    // LAOPlannerParams::ParamsForGreedyOneStepPolicy();
+    LAOPlannerParams::ParamsForOnlinePolicy(2.0 * 1e-3);
 
   LAOPlanner<EdgeSelectorSSP> lao_planner(ssp);
   std::unordered_map<int, int> policy_map;
@@ -1402,6 +1436,26 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
     // printf("Current best path idx  %d\n", best_valid_path_idx);
     // cout << "Current state " << current_state.to_string() << endl;
     // cout << "Current bound " << bound << endl;
+
+    // Currently recording only new feasible solutions that are different from
+    // previous solutions.
+    const bool is_path_executable = (best_valid_path_idx != -1);
+    // const bool new_solution = !(best_valid_path_idx == old_best_valid_path_idx
+    //                             && fabs(old_bound - bound) < 1e-8);
+
+    // if (is_path_executable && new_solution) {
+    if (is_path_executable) {
+      const auto &path = paths[best_valid_path_idx];
+      int id = path.state_ids.back();
+      const bool is_path_to_goal = (id == orig_goal_state_id);
+
+      if (is_path_to_goal) {
+        AddNewSolution(paths[best_valid_path_idx]);
+      }
+
+      old_best_valid_path_idx = best_valid_path_idx;
+      old_bound = bound;
+    }
 
     const bool optimal_executable_soln_found = (best_valid_path_idx != -1) &&
                                                ssp->GetSuboptimalityBound(current_state) < (kBoundForTermination +
@@ -1483,25 +1537,8 @@ int ESPPlanner::GetTruePathIdx(const std::vector<sbpl::Path> &paths,
       //        edge_to_evaluate.second);
     }
 
-    // Currently recording only new feasible solutions that are different from
-    // previous solutions.
-    const bool is_path_executable = (best_valid_path_idx != -1);
-    // const bool new_solution = !(best_valid_path_idx == old_best_valid_path_idx 
-    //                             && fabs(old_bound - bound) < 1e-8);
-
-    // if (is_path_executable && new_solution) {
-    if (is_path_executable) {
-      const auto &path = paths[best_valid_path_idx];
-      int id = path.state_ids.back();
-      const bool is_path_to_goal = (id == orig_goal_state_id);
-
-      if (is_path_to_goal) {
-        AddNewSolution(paths[best_valid_path_idx]);
-      }
-      old_best_valid_path_idx = best_valid_path_idx;
-      old_bound = bound;
-    }
   }
+
   return best_valid_path_idx;
 }
 
@@ -1692,15 +1729,6 @@ void ESPPlanner::initializeSearch() {
     key.key[0] = start_state->h;
     heaps[ii].insertheap(start_state, key);
 
-    const auto &wrapper_state =
-      environment_wrapper_->wrapper_state_hasher_.GetState(start_state->id);
-
-    if (edge_set_heaps_[wrapper_state.lazy_edges].currentsize == 0) {
-      edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
-    }
-
-    auto wrapper_heap_state = GetEdgeSetState(start_state);
-    edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
 
     queue_best_h_dts[ii] = start_state->h;
 
@@ -1712,7 +1740,18 @@ void ESPPlanner::initializeSearch() {
     }
   }
 
-  start_state = GetState(0, start_state_id);
+  if (kUseEdgeSetIndexedHeaps) {
+    // Insert the state into our edge-set indexed heap.
+    start_state = GetState(0, start_state_id);
+    CKey key;
+    key.key[0] = start_state->h;
+    auto wrapper_heap_state = GetEdgeSetState(start_state);
+    const auto &wrapper_state =
+      environment_wrapper_->wrapper_state_hasher_.GetState(start_state->id);
+    edge_set_heaps_[wrapper_state.lazy_edges].makeemptyheap();
+    edge_set_heaps_[wrapper_state.lazy_edges].insertheap(wrapper_heap_state, key);
+  }
+
 
   //ensure heuristics are up-to-date
   environment_wrapper_->EnsureHeuristicsUpdated((bforwardsearch == true));
@@ -1848,12 +1887,13 @@ void ESPPlanner::prepareNextSearchIteration() {
 }
 
 int ESPPlanner::GetBestHeuristicID() {
-  // if (queue_best_h_dts[probability_queue] != 0 &&
-  //     queue_stuck_in_minima[probability_queue] < 100) {
   //  For FBP.
+  if (queue_best_h_dts[probability_queue] != 0 &&
+      queue_stuck_in_minima[probability_queue] < kNumExpandsForLocalMinDetection) {
   // if (queue_best_h_dts[probability_queue] != 0) {
-  //   return probability_queue;
-  // }
+    return probability_queue;
+  }
+
   // return 1;
 
 
@@ -2121,8 +2161,7 @@ int ESPPlanner::replan(vector<sbpl::Path> *solution_paths, ReplanParams p,
 
 int ESPPlanner::set_goal(int id) {
   const int wrapper_goal_id = environment_wrapper_->GetWrapperStateID(id,
-                                                                      std::numeric_limits<double>::lowest(),
-                                                                      std::set<int>(), std::set<int>());
+                                                                      std::numeric_limits<double>::lowest(), std::set<int>());
   environment_wrapper_->SetOriginalGoalID(id);
   printf("planner: setting env goal to %d and wrapper goal to %d\n", id,
          wrapper_goal_id);
@@ -2139,7 +2178,7 @@ int ESPPlanner::set_goal(int id) {
 
 int ESPPlanner::set_start(int id) {
   const int wrapper_start_id = environment_wrapper_->GetWrapperStateID(id, 0.0,
-                                                                       std::set<int>(), std::set<int>());
+                                                                       std::set<int>());
   printf("planner: setting env start to %d and wrapper start to %d\n", id,
          wrapper_start_id);
 
@@ -2154,37 +2193,45 @@ int ESPPlanner::set_start(int id) {
 }
 
 std::vector<int> ESPPlanner::GetBestDistinctFrontierStateIDs() {
+
   vector<int> best_wrapper_ids;
-  best_wrapper_ids.reserve(edge_set_heaps_.size());
 
-  // cout << "Best wrappers: " << endl;
-  // vector<std::set<int>> keys_to_erase;
-  for (auto &map_element : edge_set_heaps_) {
-    // Skip heaps which are now empty.
-    if (map_element.second.currentsize == 0) {
-      continue;
+  if (kUseEdgeSetIndexedHeaps) {
+    best_wrapper_ids.reserve(edge_set_heaps_.size());
+
+    // cout << "Best wrappers: " << endl;
+    // vector<std::set<int>> keys_to_erase;
+    for (auto &map_element : edge_set_heaps_) {
+      // Skip heaps which are now empty.
+      if (map_element.second.currentsize == 0) {
+        continue;
+      }
+
+      const auto best_state = (EdgeSetState *)map_element.second.getminheap();
+
+      if (environment_wrapper_->WrapperContainsInvalidEdgeGroup(best_state->id,
+                                                                invalid_edge_groups_)) {
+        // keys_to_erase.push_back(map_element.first);
+        continue;
+      }
+
+      best_wrapper_ids.push_back(best_state->id);
+      const auto &wrapper_state =
+        environment_wrapper_->wrapper_state_hasher_.GetState(best_state->id);
+      // cout <<  wrapper_state << endl;
     }
 
-    const auto best_state = (EdgeSetState *)map_element.second.getminheap();
-
-    if (environment_wrapper_->WrapperContainsInvalidEdge(best_state->id,
-                                                         invalid_edges_)) {
-      // keys_to_erase.push_back(map_element.first);
-      continue;
+    // TODO: safely erase these keys such that it doesn't affect the
+    // putStateInHeap method.
+    // for (const auto& key : keys_to_erase) {
+    //   edge_set_heaps_.erase(key);
+    // }
+  } else {
+    for (int q_id = 0; q_id < num_heuristics; ++q_id) {
+      const auto best_state = (ESPState *)heaps[q_id].getminheap();
+      best_wrapper_ids.push_back(best_state->id);
     }
-
-    best_wrapper_ids.push_back(best_state->id);
-    const auto &wrapper_state =
-      environment_wrapper_->wrapper_state_hasher_.GetState(best_state->id);
-    // cout <<  wrapper_state << endl;
   }
-
-  // TODO: safely erase these keys such that it doesn't affect the
-  // putStateInHeap method.
-  // for (const auto& key : keys_to_erase) {
-  //   edge_set_heaps_.erase(key);
-  // }
-
   return best_wrapper_ids;
 }
 
@@ -2205,69 +2252,73 @@ void ESPPlanner::PruneStatesWithInvalidEdgeGroup(int edge_group_id) {
         }
       }
 
-      // Next delete from the heap indexed by lazy set, if it is present.
-      const auto &wrapper_state =
-        environment_wrapper_->wrapper_state_hasher_.GetState(sa->id);
-      auto edge_set_state = GetEdgeSetState(sa);
+      if (kUseEdgeSetIndexedHeaps) {
+        // Next delete from the heap indexed by lazy set, if it is present.
+        const auto &wrapper_state =
+          environment_wrapper_->wrapper_state_hasher_.GetState(sa->id);
+        auto edge_set_state = GetEdgeSetState(sa);
 
-      if (edge_set_state->heapindex != 0) {
-        edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
+        if (edge_set_state->heapindex != 0) {
+          edge_set_heaps_[wrapper_state.lazy_edges].deleteheap(edge_set_state);
+        }
       }
     }
   }
 }
 
 void ESPPlanner::UpdateStatesWithValidEdgeGroup(int edge_group_id) {
-  vector<int> states_to_update;
-  states_to_update.reserve(heaps[0].currentsize);
-
-  for (int kk = 1; kk <= heaps[0].currentsize; ++kk) {
-    ESPState *sa = (ESPState *)heaps[0].heap[kk].heapstate;
-
-    if (!environment_wrapper_->WrapperContainsEdgeGroup(sa->id, edge_group_id)) {
-      continue;
-    }
-
-    states_to_update.push_back(sa->id);
-  }
-
-  for (int ii = 0; ii < static_cast<int>(states_to_update.size()); ++ii) {
-    const int state_to_update = states_to_update[ii];
-    auto anchor_original_state = GetState(0, state_to_update);
-    int new_wrapper_state_id = environment_wrapper_->GetUpdatedWrapperStateID(
-                                 state_to_update, invalid_edge_groups_, valid_edge_groups_);
-
-    ESPState *anchor_new_sa = GetState(0, new_wrapper_state_id);
-
-    if (anchor_new_sa->iteration_closed == search_iteration) {
-      continue;
-    }
-
-    CKey key = heaps[0].getkeyheap(anchor_original_state);
-
-    for (int q_id = 0; q_id < num_heuristics; ++q_id) {
-      ESPState *state = GetState(q_id, new_wrapper_state_id);
-      auto original_state = GetState(q_id, state_to_update);
-      *state = *original_state;
-      state->id = new_wrapper_state_id;
-      putStateInHeap(q_id, state);
-    }
-
-    // Next delete from the heap indexed by lazy set, if it is present.
-    const auto &new_wrapper_state =
-      environment_wrapper_->wrapper_state_hasher_.GetState(new_wrapper_state_id);
-    auto edge_set_state = GetEdgeSetState(new_wrapper_state_id);
-
-    const auto &idx = new_wrapper_state.lazy_edges;
-    auto state = GetEdgeSetState(new_wrapper_state_id);
-    auto original_state = GetEdgeSetState(state_to_update);
-    *state = *original_state;
-    state->id = new_wrapper_state_id;
-
-    if (edge_set_state->heapindex == 0) {
-      edge_set_heaps_[idx].insertheap(state, key);
-    }
-  }
+  // vector<int> states_to_update;
+  // states_to_update.reserve(heaps[0].currentsize);
+  //
+  // for (int kk = 1; kk <= heaps[0].currentsize; ++kk) {
+  //   ESPState *sa = (ESPState *)heaps[0].heap[kk].heapstate;
+  //
+  //   if (!environment_wrapper_->WrapperContainsEdgeGroup(sa->id, edge_group_id)) {
+  //     continue;
+  //   }
+  //
+  //   states_to_update.push_back(sa->id);
+  // }
+  //
+  // for (int ii = 0; ii < static_cast<int>(states_to_update.size()); ++ii) {
+  //   const int state_to_update = states_to_update[ii];
+  //   auto anchor_original_state = GetState(0, state_to_update);
+  //   int new_wrapper_state_id = environment_wrapper_->GetUpdatedWrapperStateID(
+  //                                state_to_update, invalid_edge_groups_, valid_edge_groups_);
+  //
+  //   ESPState *anchor_new_sa = GetState(0, new_wrapper_state_id);
+  //
+  //   if (anchor_new_sa->iteration_closed == search_iteration) {
+  //     continue;
+  //   }
+  //
+  //   CKey key = heaps[0].getkeyheap(anchor_original_state);
+  //
+  //   for (int q_id = 0; q_id < num_heuristics; ++q_id) {
+  //     ESPState *state = GetState(q_id, new_wrapper_state_id);
+  //     auto original_state = GetState(q_id, state_to_update);
+  //     *state = *original_state;
+  //     state->id = new_wrapper_state_id;
+  //     putStateInHeap(q_id, state);
+  //   }
+  //
+  //   if (kUseEdgeSetIndexedHeaps) {
+  //     // Next delete from the heap indexed by lazy set, if it is present.
+  //     const auto &new_wrapper_state =
+  //       environment_wrapper_->wrapper_state_hasher_.GetState(new_wrapper_state_id);
+  //     auto edge_set_state = GetEdgeSetState(new_wrapper_state_id);
+  //
+  //     const auto &idx = new_wrapper_state.lazy_edges;
+  //     auto state = GetEdgeSetState(new_wrapper_state_id);
+  //     auto original_state = GetEdgeSetState(state_to_update);
+  //     *state = *original_state;
+  //     state->id = new_wrapper_state_id;
+  //
+  //     if (edge_set_state->heapindex == 0) {
+  //       edge_set_heaps_[idx].insertheap(state, key);
+  //     }
+  //   }
+  // }
 }
 
 vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids) {
@@ -2334,14 +2385,15 @@ vector<sbpl::Path> ESPPlanner::GetCurrentSolutionPaths(vector<int> *path_ids,
 
     int path_cost = 0;
     vector<int> wrapper_ids_path = GetSearchPathUnsafe(search_state,
-                                                 path_cost);
+                                                       path_cost);
     auto solution_path = environment_wrapper_->ConvertWrapperIDsPathToSBPLPath(
                            wrapper_ids_path);
 
     if (!partial_paths) {
       solution_path.cost = path_cost;
     } else {
-      solution_path.cost = path_cost + search_state->h;
+      // TODO: check this.
+      solution_path.cost = path_cost + int(inflation_eps * search_state->h);
     }
 
     paths_to_evaluate.push_back(solution_path);

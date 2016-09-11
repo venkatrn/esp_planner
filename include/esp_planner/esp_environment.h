@@ -70,10 +70,9 @@ std::ostream &operator<< (std::ostream &stream, const WrapperState &state);
 class WrapperState {
  public:
   explicit WrapperState(int state_id, double log_prob,
-                        const std::set<int> &lazy_edges,
-                        const std::set<int> &all_stochastic_edges) : env_state_id(state_id),
+                        const std::set<int> &lazy_edges) : env_state_id(state_id),
     log_prob(log_prob),
-    lazy_edges(lazy_edges), all_stochastic_edges(all_stochastic_edges) {}
+    lazy_edges(lazy_edges) {}
   // explicit WrapperState(int state_id, double log_prob,
   //                       const std::set<int> &lazy_edges) : WrapperState(state_id, log_prob, lazy_edges,
   //                                                                         std::set<int>()) {}
@@ -83,9 +82,6 @@ class WrapperState {
   // A collection of edges (or edge sets) that have been traversed by this
   // path.
   std::set<int> lazy_edges;
-  // A collection of all probabilistic that have been traversed by this
-  // path.
-  std::set<int> all_stochastic_edges;
   // The log probability of this path.
   double log_prob = std::numeric_limits<double>::max();
 
@@ -141,13 +137,14 @@ class EnvWrapper {
   int WrapperToStateID(int wrapper_id) const;
   // Returns ID of the newly created state, or the existing state.
   int GetWrapperStateID(int state_id, double prob,
-                        const std::set<int> &lazy_edges,
-                        const std::set<int> &all_stochastic_edges);
+                        const std::set<int> &lazy_edges);
   // Does wrapper_state.lazy_edges contain edge.
   bool WrapperContainsOriginalEdge(int wrapper_state_id, const sbpl::Edge &edge);
   // Does edges contain any of the edges in wrapper_state.lazy_edges.
   bool WrapperContainsInvalidEdge(int wrapper_state_id,
                                   const std::unordered_set<sbpl::Edge> &edges);
+  bool WrapperContainsInvalidEdgeGroup(int wrapper_state_id,
+                                  const std::unordered_set<int> &invalid_edge_groups);
   // Is edge_group_id in wrapper_state.lazy_edges
   bool WrapperContainsEdgeGroup(int wrapper_state_id,
                                   int invalid_edge_group_id);

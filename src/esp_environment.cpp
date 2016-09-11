@@ -1,5 +1,9 @@
 #include <esp_planner/esp_environment.h>
 
+#include <chrono>
+
+using high_res_clock = std::chrono::high_resolution_clock;
+
 using namespace std;
 
 namespace {
@@ -24,6 +28,8 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
                           std::vector<int> *costs, std::vector<double> *edge_probabilities,
                           std::vector<double> *edge_eval_times, std::vector<int> *edge_groups) {
 
+  // high_res_clock::time_point TimeStarted = high_res_clock::now();
+
   if (kUseCaching) {
     if (succs_cache_.find(parent_id) != succs_cache_.end()) {
       *succ_ids = succs_cache_[parent_id];
@@ -42,8 +48,6 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
 
   const auto &parent_wrapper = wrapper_state_hasher_.GetState(parent_id);
   const set<int> &parent_lazy_edges = parent_wrapper.lazy_edges;
-  const set<int> &parent_all_stochastic_edges =
-    parent_wrapper.all_stochastic_edges;
   const int orig_parent_id = WrapperToStateID(parent_id);
   vector<int> orig_succ_ids;
   vector<int> orig_costs;
@@ -66,6 +70,8 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
   edge_eval_times->reserve(orig_succ_ids.size());
   edge_groups->reserve(orig_succ_ids.size());
 
+  int num_new_stochastic_edges = 0;
+
   for (size_t ii = 0; ii < orig_succ_ids.size(); ++ii) {
     if (orig_edge_probabilities[ii] < kDblTolerance) {
       // Skip edges that have zero probability.
@@ -73,7 +79,6 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     }
 
     auto succ_lazy_edges = parent_lazy_edges;
-    auto succ_all_stochastic_edges = parent_all_stochastic_edges;
 
     // TODO: we could hash only stochastic edges. Would need to update
     // ConvertWrapperIDsToSBPLPath accordingly.
@@ -83,17 +88,24 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     // We have a stochastic edge.
     double wrapper_state_log_prob = parent_wrapper.log_prob;
 
+    // Assign to edge_id unless we are also provided with a edge_group_id.
+    int edge_group_id = edge_id;
+
     if (orig_edge_probabilities[ii] < 1.0 - kDblTolerance) {
-      succ_all_stochastic_edges.insert(edge_id);
+      num_new_stochastic_edges++;
 
       // TODO: check self-consistency.
       // TODO: use edge_group info here if available.
       if (orig_edge_groups.empty()) {
-        succ_lazy_edges.insert(edge_id);
+        // If we don't have edge group information, we will use the edge's ID
+        // as its group ID, thereby having a distinct group ID for each
+        // stochastic edge.
+        succ_lazy_edges.insert(edge_group_id);
         wrapper_state_log_prob += log(orig_edge_probabilities[ii]);
       } else {
         auto insert_code = succ_lazy_edges.insert(orig_edge_groups[ii]);
-        edge_groups->push_back(orig_edge_groups[ii]);
+        edge_group_id = orig_edge_groups[ii];
+        edge_groups->push_back(edge_group_id);
 
         // Multiply probability only if this is the first time we pass through
         // this edge group.
@@ -110,15 +122,11 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
     edge_eval_times->push_back(orig_edge_eval_times[ii]);
     costs->push_back(orig_costs[ii]);
 
-    if (edge_groups != nullptr && !edge_groups->empty()) {
-      edge_to_group_id_mapping_[edge] = orig_edge_groups[ii];
-    }
-
+    edge_to_group_id_mapping_[edge] = edge_group_id;
 
     const int wrapper_succ_id = GetWrapperStateID(orig_succ_ids[ii],
                                                   wrapper_state_log_prob,
-                                                  succ_lazy_edges,
-                                                  succ_all_stochastic_edges);
+                                                  succ_lazy_edges);
     succ_ids->push_back(wrapper_succ_id);
 
     orig_state_to_wrapper_ids_mapping_[orig_succ_ids[ii]].insert(
@@ -176,6 +184,11 @@ void EnvWrapper::GetSuccs(int parent_id, std::vector<int> *succ_ids,
       edge_groups_cache_[parent_id] = *edge_groups;
     }
   }
+
+  // auto elapsed_seconds =
+  //   std::chrono::duration_cast<std::chrono::duration<double>>
+  //   (high_res_clock::now() - TimeStarted);
+  // printf("Succs (%d) took %f seconds\n", num_new_stochastic_edges, elapsed_seconds.count());
 }
 
 void EnvWrapper::GetPreds(int parent_id, std::vector<int> *succ_ids,
@@ -250,9 +263,8 @@ int EnvWrapper::WrapperToStateID(int wrapper_id) const {
 }
 
 int EnvWrapper::GetWrapperStateID(int state_id, double prob,
-                                  const std::set<int> &lazy_edges,
-                                  const std::set<int> &all_stochastic_edges) {
-  WrapperState wrapper(state_id, prob, lazy_edges, all_stochastic_edges);
+                                  const std::set<int> &lazy_edges) {
+  WrapperState wrapper(state_id, prob, lazy_edges);
   int wrapper_state_id = 0;
 
   if (wrapper_state_hasher_.Exists(wrapper)) {
@@ -278,32 +290,39 @@ const {
   return state_wrapper_ids;
 }
 
-int EnvWrapper::GetUpdatedWrapperStateID(int wrapper_state_id, const std::set<int>& invalid_edge_groups, const std::set<int>& valid_edge_groups) {
+int EnvWrapper::GetUpdatedWrapperStateID(int wrapper_state_id,
+                                         const std::set<int> &invalid_edge_groups,
+                                         const std::set<int> &valid_edge_groups) {
   int orig_state_id = WrapperToStateID(wrapper_state_id);
   const auto &wrapper_state = wrapper_state_hasher_.GetState(
-                                       wrapper_state_id);
+                                wrapper_state_id);
 
-    std::set<int> unevaluated_edges_in_equiv_temp;
-    std::set<int> unevaluated_edges_in_equiv;
-    std::set_difference(wrapper_state.lazy_edges.begin(), 
-                        wrapper_state.lazy_edges.end(),
-                        valid_edge_groups.begin(), 
-                        valid_edge_groups.end(),
-                        std::inserter(unevaluated_edges_in_equiv_temp, unevaluated_edges_in_equiv_temp.begin()));
-    std::set_difference(unevaluated_edges_in_equiv_temp.begin(), 
-                        unevaluated_edges_in_equiv_temp.end(),
-                        invalid_edge_groups.begin(), 
-                        invalid_edge_groups.end(),
-                        std::inserter(unevaluated_edges_in_equiv, unevaluated_edges_in_equiv.begin()));
-    if (unevaluated_edges_in_equiv == wrapper_state.lazy_edges) {
-      return wrapper_state_id;
-    } 
-    // TODO: we need to remove evaluated edges from "all stochastic edges" as well.
-    const int new_wrapper_state_id = GetWrapperStateID(wrapper_state.env_state_id,wrapper_state.log_prob, unevaluated_edges_in_equiv, wrapper_state.all_stochastic_edges);
-    return new_wrapper_state_id;
+  std::set<int> unevaluated_edges_in_equiv_temp;
+  std::set<int> unevaluated_edges_in_equiv;
+  std::set_difference(wrapper_state.lazy_edges.begin(),
+                      wrapper_state.lazy_edges.end(),
+                      valid_edge_groups.begin(),
+                      valid_edge_groups.end(),
+                      std::inserter(unevaluated_edges_in_equiv_temp,
+                                    unevaluated_edges_in_equiv_temp.begin()));
+  std::set_difference(unevaluated_edges_in_equiv_temp.begin(),
+                      unevaluated_edges_in_equiv_temp.end(),
+                      invalid_edge_groups.begin(),
+                      invalid_edge_groups.end(),
+                      std::inserter(unevaluated_edges_in_equiv, unevaluated_edges_in_equiv.begin()));
+
+  if (unevaluated_edges_in_equiv == wrapper_state.lazy_edges) {
+    return wrapper_state_id;
+  }
+
+  // TODO: we need to remove evaluated edges from "all stochastic edges" as well.
+  const int new_wrapper_state_id = GetWrapperStateID(wrapper_state.env_state_id,
+                                                     wrapper_state.log_prob, unevaluated_edges_in_equiv);
+  return new_wrapper_state_id;
 }
 
-std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id, const std::set<int>& valid_edge_groups) const {
+std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id,
+                                                 const std::set<int> &valid_edge_groups) const {
   int orig_state_id = WrapperToStateID(wrapper_state_id);
   const auto &source_wrapper_state = wrapper_state_hasher_.GetState(
                                        wrapper_state_id);
@@ -318,18 +337,25 @@ std::vector<int> EnvWrapper::AllSubsetWrapperIDs(int wrapper_state_id, const std
 
     const auto &wrapper_state = wrapper_state_hasher_.GetState(
                                   state_wrapper_ids[ii]);
-    std::set<int> unevaluated_edges_in_equiv;
-    std::set_difference(wrapper_state.lazy_edges.begin(), 
-                        wrapper_state.lazy_edges.end(),
-                        valid_edge_groups.begin(), 
-                        valid_edge_groups.end(),
-                        std::inserter(unevaluated_edges_in_equiv, unevaluated_edges_in_equiv.begin()));
 
-    const bool is_subset = std::includes(source_wrapper_state.lazy_edges.begin(),
-                                         source_wrapper_state.lazy_edges.end(), unevaluated_edges_in_equiv.begin(),
-                                         unevaluated_edges_in_equiv.end());
+    bool is_subset = false;
 
-    // const bool is_subset = IsSubset(source_wrapper_state, wrapper_state);
+    if (valid_edge_groups.empty()) {
+      is_subset = std::includes(source_wrapper_state.lazy_edges.begin(),
+                                source_wrapper_state.lazy_edges.end(), wrapper_state.lazy_edges.begin(),
+                                wrapper_state.lazy_edges.end());
+    } else {
+      std::set<int> unevaluated_edges_in_equiv;
+      std::set_difference(wrapper_state.lazy_edges.begin(),
+                          wrapper_state.lazy_edges.end(),
+                          valid_edge_groups.begin(),
+                          valid_edge_groups.end(),
+                          std::inserter(unevaluated_edges_in_equiv, unevaluated_edges_in_equiv.begin()));
+
+      is_subset = std::includes(source_wrapper_state.lazy_edges.begin(),
+                                source_wrapper_state.lazy_edges.end(), unevaluated_edges_in_equiv.begin(),
+                                unevaluated_edges_in_equiv.end());
+    }
 
     if (is_subset) {
       subset_wrapper_ids.push_back(state_wrapper_ids[ii]);
@@ -389,55 +415,52 @@ bool EnvWrapper::IsSubset(const WrapperState &source_wrapper_state,
 
 bool EnvWrapper::WrapperContainsOriginalEdge(int wrapper_state_id,
                                              const sbpl::Edge &edge) {
-  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
   const int edge_id = edge_hasher_.GetStateID(edge);
-  return (wrapper_state.all_stochastic_edges.find(edge_id) !=
-          wrapper_state.all_stochastic_edges.end());
+  const int edge_group_id = edge_to_group_id_mapping_[edge];
+  return WrapperContainsEdgeGroup(wrapper_state_id, edge_group_id);
 }
 
-bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id,
-                                            const std::unordered_set<sbpl::Edge> &edges) {
-  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
-  bool contains_invalid_edge = false;
+bool EnvWrapper::WrapperContainsInvalidEdgeGroup(int wrapper_state_id,
+                                                 const std::unordered_set<int> &invalid_edge_groups) {
 
-  std::unordered_set<int> invalid_edge_groups;
-
-  bool using_edge_groups = true;
-  for (const auto &invalid_edge : edges) {
-    auto it = edge_to_group_id_mapping_.find(invalid_edge);
-    if (it != edge_to_group_id_mapping_.end()) {
-      invalid_edge_groups.insert(edge_to_group_id_mapping_[invalid_edge]);
-    } else {
-      using_edge_groups = false;
-      break;
-    }
+  if (invalid_edge_groups.empty()) {
+    return false;
   }
 
-  // Make this clear when defining edge groups.
+  bool contains_invalid_edge = false;
+  const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
 
-  if (!using_edge_groups) {
-    for (const auto &edge_id : wrapper_state.all_stochastic_edges) {
-      const auto &edge = edge_hasher_.GetState(edge_id);
-
-      if (edges.find(edge) != edges.end()) {
-        contains_invalid_edge = true;
-        break;
-      }
-    }
-  } else {
-    for (const auto &edge_group_id : wrapper_state.lazy_edges) {
-      if (invalid_edge_groups.find(edge_group_id) != invalid_edge_groups.end()) {
-        contains_invalid_edge = true;
-        break;
-      }
+  for (const auto &edge_group_id : wrapper_state.lazy_edges) {
+    if (invalid_edge_groups.find(edge_group_id) != invalid_edge_groups.end()) {
+      contains_invalid_edge = true;
+      break;
     }
   }
 
   return contains_invalid_edge;
 }
 
+bool EnvWrapper::WrapperContainsInvalidEdge(int wrapper_state_id,
+                                            const std::unordered_set<sbpl::Edge> &edges) {
+  std::unordered_set<int> invalid_edge_groups;
+
+  for (const auto &invalid_edge : edges) {
+    auto it = edge_to_group_id_mapping_.find(invalid_edge);
+
+    if (it != edge_to_group_id_mapping_.end()) {
+      invalid_edge_groups.insert(edge_to_group_id_mapping_[invalid_edge]);
+    } else {
+      printf("Failed to get edge group mapping for edge : %d -> %d\n",
+             invalid_edge.first, invalid_edge.second);
+      return false;
+    }
+  }
+
+  return WrapperContainsInvalidEdgeGroup(wrapper_state_id, invalid_edge_groups);
+}
+
 bool EnvWrapper::WrapperContainsEdgeGroup(int wrapper_state_id,
-                                            int invalid_edge_group_id) {
+                                          int invalid_edge_group_id) {
   const auto &wrapper_state = wrapper_state_hasher_.GetState(wrapper_state_id);
   return (wrapper_state.lazy_edges.find(invalid_edge_group_id) !=
           wrapper_state.lazy_edges.end());
@@ -502,7 +525,7 @@ std::ostream &operator<< (std::ostream &stream, const WrapperState &state) {
 void EnvWrapper::SetOriginalGoalID(int original_goal_id) {
   original_goal_id_ = original_goal_id;
   const int wrapper_goal_id = GetWrapperStateID(original_goal_id,
-                                                std::numeric_limits<double>::lowest(), std::set<int>(), std::set<int>());
+                                                std::numeric_limits<double>::lowest(), std::set<int>());
   goal_wrapper_ids_.insert(wrapper_goal_id);
   orig_state_to_wrapper_ids_mapping_[original_goal_id_].insert(wrapper_goal_id);
 }
