@@ -275,12 +275,12 @@ int main(int argc, char *argv[]) {
   edge_groups_color.setTo(cv::Vec3b(0, 0, 0), edge_groups == 0);
   edge_groups_color.setTo(cv::Vec3b(255, 255, 255), edge_groups == group_id);
   cv::imshow("Edge groups", edge_groups_color);
-  cv::imwrite("/usr0/home/venkatrn/indigo_workspace/src/esp_planner/edge_groups.png", edge_groups_color);
+  cv::imwrite("/home/venkatrn/indigo_workspace/src/esp_planner/edge_groups.png", edge_groups_color);
   // cv::waitKey(0);
   // return 1;
 
   boost::filesystem::path output_file =
-    "/usr0/home/venkatrn/indigo_workspace/src/esp_planner/stats";
+    "/home/venkatrn/indigo_workspace/src/esp_planner/stats";
   ofstream fs_esp, fs_lazy;
   string filename = output_file.string() + "_esp_" + argv[2] + "_" +
     argv[3];
